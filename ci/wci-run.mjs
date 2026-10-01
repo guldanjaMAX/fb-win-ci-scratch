@@ -214,6 +214,21 @@ function failureEntries(lines) {
   });
 }
 
+
+function failingTapLines(text) {
+  const lines = String(text).split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length && out.length < 120; i += 1) {
+    if (/^\s*not ok\b/.test(lines[i])) {
+      out.push(`fail=${lines[i].trim()}`);
+      for (let j = i + 1; j < Math.min(lines.length, i + 12) && !/^\s*(not )?ok\b/.test(lines[j]); j += 1) {
+        if (/error|expected|actual|message|code/i.test(lines[j])) out.push(`  ${lines[j].trim().slice(0, 240)}`);
+      }
+    }
+  }
+  return out;
+}
+
 async function writeFailureDetails(outDir, root, group, lines, details = new Map()) {
   for (const entry of failureEntries(lines)) {
     const supplied = details.get(entry.arm) ?? [];
@@ -419,6 +434,7 @@ async function runAll({ root, output, spawnImpl = defaultSpawn, environment = pr
       `command=node ${commandArgs.join(" ")}`,
       `exit=${run.status ?? run.error?.code ?? "unknown"}`,
       evaluated.reason,
+      ...failingTapLines(`${run.stdout ?? ""}\n${run.stderr ?? ""}`),
     ]);
     laneLines.push(checkLine("lanes", lane, evaluated.status, evaluated.reason));
   }

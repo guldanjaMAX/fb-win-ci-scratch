@@ -92,6 +92,8 @@ try {
     )
     foreach ($check in $checks) {
       $actual = Read-TaskSetting $check[0]
+      # Task Scheduler omits RunLevel from the exported XML when it is the default, LeastPrivilege.
+      if (($check[0] -eq 'RunLevel') -and [string]::IsNullOrEmpty($actual)) { $actual = 'LeastPrivilege' }
       if ($actual -cne $check[1]) {
         Fail-Task 'Export-ScheduledTask' $check[0] "expected=$($check[1]) actual=$actual"
       }

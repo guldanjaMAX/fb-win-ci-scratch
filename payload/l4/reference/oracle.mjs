@@ -12,7 +12,7 @@ const reasons = new Map([
   ["W4", new Set(["queue-zero", "pending", "projection", "queue", "wait-elapsed", "finish-later"])],
   ["W5", new Set(["drive-not-terminal"])],
   ["W6", new Set(["sha"])],
-  ["W7", new Set(["stage", "rejoin", "retry-cpu-reset", "retry-last-stage-503", "verified", "pending-migration-seen", "queue-not-empty", "update-retry", "update-queued", "queued", "second-failure", "pending-migration"])],
+  ["W7", new Set(["stage", "rejoin", "retry-cpu-reset", "retry-last-stage-503", "verified", "pending-migration-seen", "queue-not-empty", "update-retry", "update-queued", "queued", "failed", "second-failure", "pending-migration"])],
   ["W8", new Set(["check-start", "calendar-ok", "reconnect-needed", "connected", "scopes-all", "scope-missing-drive", "scope-missing-gmail", "scope-missing-calendar", "account-changed", "account-same", "account-unknown", "restored", "kept", "sac-refused", "google-partial", "google-account", "google-consent", "off", "google-busy", "google-none", "consent-not-finished", "check-failed", "connect-failed"])],
   ["W11", new Set(["key-removed", "done"])]
 ]);
