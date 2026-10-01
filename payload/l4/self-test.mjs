@@ -69,18 +69,29 @@ for (const [id, mutant] of Object.entries(productionMutants)) {
 }
 
 const windowsSessionSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "windows-session.mjs"), "utf8");
+const windowsStorePullSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "windows-store-pull.mjs"), "utf8");
 const armRunnerSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "run-arms.mjs"), "utf8");
 const windowsFunctionSource = armRunnerSource.slice(armRunnerSource.indexOf("function runWindowsArm"), armRunnerSource.indexOf("const args ="));
 check(!windowsSessionSource.includes("simulateArm(") && !windowsSessionSource.includes("runStubArm("), "Windows session builder never sources evidence from oracle or stub targets");
 check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.includes("runStubArm("), "Windows arm path launches the per-arm session runner");
 check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
-check(["R-NPM", "R-REG", "R-REG-control", "R-CLOSE"].every((id) => armSpecs.some((arm) => arm.id === id)), "four real-path Windows arms are registered");
+check(["R-NPM", "R-NPM-FOREIGN", "R-REG", "R-REG-control", "R-CLOSE"].every((id) => armSpecs.some((arm) => arm.id === id)), "five real-path Windows arms are registered");
+const npmOwnedControl = simulateArm("R-NPM");
+const foreignNpmControl = simulateArm("R-NPM-FOREIGN");
+const missedForeignRefusal = structuredClone(foreignNpmControl);
+missedForeignRefusal.meta.foreignEexist = false;
+check(verifyArm(npmOwnedControl).pass && verifyArm(foreignNpmControl).pass && !verifyArm(missedForeignRefusal).pass, "npm-owned green control passes and the foreign arm cannot pass without its EEXIST decision");
 check(!windowsSessionSource.includes("fb-test-step.json") && windowsSessionSource.includes("scenarioForSupervisorArgv"), "Windows fixtures use production argv instead of the dropped supervisor test environment");
 check(windowsSessionSource.includes("emptyExpectedStubSteps") && armRunnerSource.includes('result.status = "void"'), "empty expected stub output is preserved as VOID through the arm runner");
 check(windowsSessionSource.includes("makeFakeNode(fixture.prefix)"), "Windows session keeps the selected prefix, fake node, and npm entry on one production resolution path");
 check(windowsSessionSource.includes('join(fixture.prefix, "npm-calls.jsonl")'), "Windows session projects the recording npm call into session evidence");
 check(windowsSessionSource.includes('join(fixture.run, "kit", "brain-installer.tgz")') && !windowsSessionSource.includes('join(fixture.run, "kit", "tgz")'), "every cached-kit fixture uses the post-fix tarball file name");
 check(windowsSessionSource.includes('testMode: "off"') && windowsSessionSource.includes("snapshotRegistry") && windowsSessionSource.includes("runCloseSubrun"), "real arms disable the product seam, restore registry state, and exercise scheduled-task termination");
+check(windowsStorePullSource.indexOf('"S8-REG"') < windowsStorePullSource.indexOf('"S8-REFUSE"') && windowsStorePullSource.indexOf('"S8-REFUSE"') < windowsStorePullSource.indexOf('"S8-LIVE-WINDOW"'), "store pull Windows arms keep the positive registration control first");
+check(windowsStorePullSource.includes("taskSnapshot()") && windowsStorePullSource.includes("Start-ScheduledTask") && windowsStorePullSource.includes("stub-call-count-not-one"), "store pull registration is read back and its exact CLI action is started once");
+check(windowsStorePullSource.includes("MainWindowHandle") && windowsStorePullSource.includes("CreateNoWindow") && windowsStorePullSource.includes("WindowStyle"), "store pull Windows arm checks both hidden configuration and the live child window handle");
+check(windowsStorePullSource.includes("custom-api-decision-reached-no-task") && windowsStorePullSource.includes("live-lock-decision-reached-no-task"), "store pull refusal arms prove their decision points without a scheduled task");
+check(!windowsStorePullSource.includes("windows-session.mjs"), "store pull arms stay isolated from the concurrently edited Windows session harness");
 
 const scratch = mkdtempSync(join(tmpdir(), "phrase-self-test-"));
 check(expectedRunnerNames().length === 9, "runner bridge pins helper plus eight served files");

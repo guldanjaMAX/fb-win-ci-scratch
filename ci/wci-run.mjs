@@ -456,6 +456,70 @@ async function runAll({ root, output, spawnImpl = defaultSpawn, environment = pr
   await writeGroupLog(output, "l4", l4.lines);
   await writeFailureDetails(output, root, "l4", l4.lines);
 
+  const storeHarness = path.join(root, "payload", "l4", "windows-store-pull.mjs");
+  const storeHelper = path.join(root, "payload", "l1", "fb-win.mjs");
+  const storeMissing = [];
+  try { await readFile(storeHarness); } catch { storeMissing.push("l4"); }
+  try { await readFile(storeHelper); } catch { storeMissing.push("l1"); }
+  let storeLines;
+  const storeDetails = new Map();
+  if (storeMissing.length > 0) {
+    for (const lane of storeMissing) missing.add(lane);
+    storeLines = [checkLine("store", "all", "SKIP", `not-delivered ${[...new Set(storeMissing)].join(",")}`)];
+  } else {
+    const storeHome = path.join(tempRoot, "home-store-pull");
+    await mkdir(storeHome, { recursive: true });
+    const allowed = [
+      "SystemRoot", "WINDIR", "ComSpec", "PATH", "PATHEXT", "PSModulePath",
+      "USERDOMAIN", "USERNAME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+      "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+      "ALLUSERSPROFILE", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "OS",
+      "TEMP", "TMP",
+    ];
+    const storeEnv = {};
+    for (const name of allowed) if (environment[name] !== undefined) storeEnv[name] = environment[name];
+    Object.assign(storeEnv, {
+      HOME: storeHome,
+      USERPROFILE: storeHome,
+      TEMP: storeHome,
+      TMP: storeHome,
+      BRAIN_NO_WRANGLER_LOGIN: "1",
+    });
+    const storeRun = await spawnImpl(process.execPath, [
+      storeHarness,
+      "--helper", storeHelper,
+      "--out", path.join(output, "store-pull-results"),
+    ], {
+      cwd: root,
+      env: storeEnv,
+      windowsHide: true,
+      shell: false,
+    });
+    const observed = new Map();
+    for (const line of String(storeRun.stdout ?? "").split(/\r?\n/u)) {
+      const match = /^STORE-ARM (S8-(?:REG|REFUSE|LIVE-WINDOW)) (PASS|FAIL|VOID) ([A-Za-z0-9_.-]+)$/u.exec(line);
+      if (match) observed.set(match[1], { status: match[2], reason: match[3] });
+    }
+    storeLines = [];
+    for (const arm of ["S8-REG", "S8-REFUSE", "S8-LIVE-WINDOW"]) {
+      const result = observed.get(arm);
+      if (!result) storeLines.push(checkLine("store", arm, "FAIL", "result-missing"));
+      else storeLines.push(checkLine("store", arm, result.status, result.reason));
+      storeDetails.set(arm, [
+        `command=node payload/l4/windows-store-pull.mjs --helper payload/l1/fb-win.mjs`,
+        `runner-exit=${storeRun.status ?? storeRun.error?.code ?? "unknown"}`,
+        `result=${result?.status ?? "missing"}`,
+        `reason=${result?.reason ?? "result-missing"}`,
+      ]);
+    }
+    if (storeRun.status !== 0 && !storeLines.some((line) => / FAIL | VOID /u.test(line))) {
+      storeLines.push(checkLine("store", "runner", "FAIL", "runner-exit"));
+    }
+  }
+  allLines.push(...storeLines);
+  await writeGroupLog(output, "store", storeLines);
+  await writeFailureDetails(output, root, "store", storeLines, storeDetails);
+
   const failures = allLines.filter((line) => / FAIL /u.test(line)).length;
   const ending = failures === 0 ? "WCI: GREEN" : `WCI: RED ${failures}`;
   allLines.push(ending);

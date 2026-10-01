@@ -4,14 +4,14 @@
     {
       "name": "fb-win.mjs",
       "source": "payload/l1/fb-win.mjs",
-      "bytes": 27035,
-      "sha256": "2a29524f0e30d3f84d1b50a2dc830467a9b10c422e78259544be3647fc174c10"
+      "bytes": 35504,
+      "sha256": "aa07d4b1e0bfa929ef4417b0a4aade750208af8a57a412ae7990381734305a89"
     },
     {
       "name": "finish-window.txt",
       "source": "payload/assembled/finish-window.txt",
-      "bytes": 96083,
-      "sha256": "e8cffccc7f7c33dbc153669da2e8a1afd335c3408d777166f1d09e9ddc5bb3b5"
+      "bytes": 96047,
+      "sha256": "ecfdc9bfca7599daac74c35aa9d9e3c69f4b35f241136dccc46566dec37ba9bf"
     },
     {
       "name": "fb-run.mjs",

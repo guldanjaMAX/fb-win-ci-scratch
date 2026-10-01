@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import {
   appendFile,
   mkdir,
   readFile,
+  readdir,
   realpath,
   rename,
   rm,
@@ -29,7 +31,9 @@ const FILES = Object.freeze([
 const FACTS_NAME = "facts.json";
 const MARKER_NAME = "REHEARSAL.marker";
 const TASK_NAME = "Financial Brain update";
+const STORE_PULL_TASK_NAME = "Financial Brain store data 8AM";
 const WINDOW_TITLE = "Financial Brain update";
+const STORE_PULL_SUCCESS = "Store data will now load every day at 8:00 AM.";
 const PAGE_SENTENCES = Object.freeze({
   nothing: "Nothing more to run here today.",
   opening: "A window called Financial Brain update is opening. It does the update steps for you.",
@@ -317,6 +321,197 @@ function invokePowerShell(spawn, env, source) {
     timeout: 60_000,
     windowsHide: true,
   });
+}
+
+export function quoteWindowsArgument(value) {
+  const text = String(value);
+  if (!text || /[\s"]/u.test(text)) {
+    let quoted = '"';
+    let backslashes = 0;
+    for (const character of text) {
+      if (character === "\\") {
+        backslashes += 1;
+      } else if (character === '"') {
+        quoted += "\\".repeat(backslashes * 2 + 1) + '"';
+        backslashes = 0;
+      } else {
+        quoted += "\\".repeat(backslashes) + character;
+        backslashes = 0;
+      }
+    }
+    return quoted + "\\".repeat(backslashes * 2) + '"';
+  }
+  return text;
+}
+
+function checkedActionPath(value, label) {
+  const text = String(value);
+  if (!text || /[\0\r\n"]/u.test(text)) throw new Error(`${label} is not safe for a Windows task action`);
+  return text;
+}
+
+export function buildStorePullAction({ nodePath, cliPath, manifestPath }) {
+  const node = checkedActionPath(nodePath, "node path");
+  const cli = checkedActionPath(cliPath, "CLI path");
+  const manifest = checkedActionPath(manifestPath, "manifest path");
+  const argumentsLine = [quoteWindowsArgument(cli), "custom-api", quoteWindowsArgument(manifest)].join(" ");
+  const source = String.raw`$ErrorActionPreference = 'Stop'
+$StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+$StartInfo.FileName = '${quotePowerShell(node)}'
+$StartInfo.Arguments = '${quotePowerShell(argumentsLine)}'
+$StartInfo.UseShellExecute = $false
+$StartInfo.CreateNoWindow = $true
+$StartInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+$StartInfo.EnvironmentVariables['BRAIN_NO_WRANGLER_LOGIN'] = '1'
+$Process = [System.Diagnostics.Process]::Start($StartInfo)
+if ($null -eq $Process) { exit 1 }
+$Process.WaitForExit()
+exit $Process.ExitCode
+`;
+  const encoded = Buffer.from(source, "utf16le").toString("base64");
+  return Object.freeze({ source, encoded, argumentsLine });
+}
+
+export function fillStorePullRegister({ taskName = STORE_PULL_TASK_NAME, powerShell, actionEncoded }) {
+  const actionArguments = `-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${actionEncoded}`;
+  return String.raw`$ErrorActionPreference = 'Stop'
+$TaskName = '${quotePowerShell(taskName)}'
+$Action = New-ScheduledTaskAction -Execute '${quotePowerShell(powerShell)}' -Argument '${quotePowerShell(actionArguments)}'
+$Trigger = New-ScheduledTaskTrigger -Daily -At '08:00'
+$Settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromMinutes(30))
+$User = "$env:USERDOMAIN\$env:USERNAME"
+$Principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Force | Out-Null
+`;
+}
+
+function storePullUnregisterSource(taskName) {
+  return String.raw`$ErrorActionPreference = 'Stop'
+$TaskName = '${quotePowerShell(taskName)}'
+$Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($null -ne $Task) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+`;
+}
+
+async function regularFile(path) {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function selectedStorePath(sessionDir, prefix) {
+  const matches = (await readdir(sessionDir)).filter((name) => name.startsWith(prefix) && name.endsWith(".txt"));
+  if (matches.length !== 1) return null;
+  const bytes = await readFile(join(sessionDir, matches[0]));
+  if (bytes.length === 0 || bytes.length > 64 * 1024) return null;
+  const value = bytes.toString("utf8").trim();
+  if (!value || /[\0\r\n]/u.test(value)) return null;
+  return resolve(value);
+}
+
+async function storeWindowAlive({ sessionDir, queryProcess }) {
+  const lock = parseLock(await readMaybe(join(sessionDir, "run", "window.lock")));
+  if (!lock) return false;
+  const created = await queryProcess({ pid: lock.pid, start: lock.start });
+  if (!created) return false;
+  const delta = Math.abs(Date.parse(created) - Date.parse(lock.start));
+  return Number.isFinite(delta) && delta <= 2000;
+}
+
+async function storeWindowDone(sessionDir) {
+  const bytes = await readMaybe(join(sessionDir, "run", "status.txt"));
+  if (!bytes) return false;
+  const events = decodeStatusRecords(bytes).map(({ line }) => parseStatusLine(line)).filter(Boolean);
+  const newest = events.at(-1);
+  return newest?.step === "W11" && newest.code === "DONE";
+}
+
+export async function createStorePullScheduler(options = {}) {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const requestedSession = options.sessionDir ?? moduleDir;
+  const sessionDir = await realpath(requestedSession);
+  const platform = options.platform ?? process.platform;
+  const spawn = options.spawn ?? spawnSync;
+  const env = options.env ?? process.env;
+  const output = options.output ?? ((line) => process.stdout.write(`${line}\n`));
+  const taskName = options.taskName ?? STORE_PULL_TASK_NAME;
+  const nodePath = resolve(options.nodePath ?? process.execPath);
+  const queryProcess = options.queryProcess ?? ((value) => defaultProcessQuery({ ...value, spawn, env }));
+
+  function refuse(line) {
+    output(line);
+    return false;
+  }
+
+  async function schedule() {
+    if (platform !== "win32") return refuse("This command only works on Windows.");
+    const done = await storeWindowDone(sessionDir);
+    if (!done && await storeWindowAlive({ sessionDir, queryProcess })) {
+      return refuse("The update window is still working.");
+    }
+
+    const prefix = await selectedStorePath(sessionDir, "selected-prefix-");
+    const manifestSelection = await selectedStorePath(sessionDir, "selected-manifest-");
+    if (!prefix || !manifestSelection || !(await regularFile(manifestSelection))) {
+      return refuse("The store data schedule could not find this install.");
+    }
+
+    let manifest;
+    try {
+      const bytes = await readFile(manifestSelection);
+      if (bytes.length === 0 || bytes.length > 1024 * 1024) throw new Error("manifest size");
+      manifest = JSON.parse(bytes.toString("utf8"));
+    } catch {
+      return refuse("The store data schedule could not read the manifest.");
+    }
+    if (!manifest?.corpora || !Object.hasOwn(manifest.corpora, "custom_api")) {
+      return refuse("This install does not have store data set up.");
+    }
+
+    const cliCandidate = join(prefix, "node_modules", "brain-installer", "brain.mjs");
+    if (!(await regularFile(cliCandidate))) {
+      return refuse("The installed Brain command could not be found.");
+    }
+    const cliPath = await realpath(cliCandidate);
+    const manifestPath = await realpath(manifestSelection);
+    const powerShell = powerShellPath(env);
+    if (!powerShell) return refuse("Windows PowerShell could not be found.");
+
+    let child;
+    try {
+      const action = buildStorePullAction({ nodePath, cliPath, manifestPath });
+      const registration = fillStorePullRegister({ taskName, powerShell, actionEncoded: action.encoded });
+      child = invokePowerShell(spawn, env, registration);
+    } catch {
+      child = null;
+    }
+    if (!child || child.status !== 0 || child.error || child.signal) {
+      return refuse("The store data schedule could not be saved.");
+    }
+    output(STORE_PULL_SUCCESS);
+    return true;
+  }
+
+  async function unschedule() {
+    if (platform !== "win32") return refuse("This command only works on Windows.");
+    const powerShell = powerShellPath(env);
+    if (!powerShell) return refuse("Windows PowerShell could not be found.");
+    let child;
+    try {
+      child = invokePowerShell(spawn, env, storePullUnregisterSource(taskName));
+    } catch {
+      child = null;
+    }
+    if (!child || child.status !== 0 || child.error || child.signal) {
+      return refuse("The store data schedule could not be removed.");
+    }
+    output("The store data schedule was removed.");
+    return true;
+  }
+
+  return Object.freeze({ schedule, unschedule, sessionDir });
 }
 
 function defaultProcessQuery({ pid, spawn, env }) {
@@ -680,8 +875,14 @@ export async function createHelper(options = {}) {
 }
 
 async function main() {
-  const helper = await createHelper();
   const [verb, argument] = process.argv.slice(2);
+  if (verb === "schedule-store-pull" || verb === "unschedule-store-pull") {
+    const scheduler = await createStorePullScheduler();
+    const ok = verb === "schedule-store-pull" ? await scheduler.schedule() : await scheduler.unschedule();
+    if (!ok) process.exitCode = 1;
+    return;
+  }
+  const helper = await createHelper();
   if (verb === "start") await helper.start();
   else if (verb === "status") await helper.status();
   else if (verb === "decide") await helper.decide(argument);
@@ -689,7 +890,7 @@ async function main() {
   else throw new Error("unknown helper verb");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
   main().catch(() => {
     process.stdout.write("HELPER: ERROR internal\n");
     process.exitCode = 1;
