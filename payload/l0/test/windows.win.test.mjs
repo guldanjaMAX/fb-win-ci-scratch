@@ -51,6 +51,11 @@ function scratch(label) {
   return mkdtempSync(join(tmpdir(), `${label} space's-`));
 }
 
+test("PowerShell spawn diagnostics include launch errors", { skip: SKIP }, () => {
+  const error = Object.assign(new Error("launch failed"), { code: "E2BIG" });
+  assert.match(spawnDiagnostic({ status: null, signal: null, error, stderr: undefined }), /error=E2BIG: launch failed/u);
+});
+
 test("Windows PowerShell 5.1 parses every payload", { skip: SKIP }, () => {
   for (const name of readdirSync(PS_DIR).filter((entry) => entry.endsWith(".ps1"))) {
     const path = join(PS_DIR, name);
@@ -121,8 +126,9 @@ test("DPAPI reads in a second process and rejects a tampered copy", { skip: SKIP
   assert.deepEqual(readFileSync(recovered), Buffer.from(plain, "ascii"));
 
   const text = readFileSync(cipher, "utf8").trim();
-  const at = Math.floor(text.length / 2);
-  const changed = text.slice(0, at) + (text[at] === "A" ? "B" : "A") + text.slice(at + 1);
+  // Change the blob's first hex digit to a different value (same place the CI's own DPAPI tamper control changes).
+  // A middle digit can land on a case-only change (hex is case-insensitive) or outside what DPAPI checks.
+  const changed = (/^[aA]/.test(text) ? "B" : "A") + text.slice(1);
   const tampered = join(dir, "tampered.dpapi");
   writeFileSync(tampered, changed, "ascii");
   const check = `$Ascii=New-Object Text.ASCIIEncoding; [IO.File]::WriteAllText(${psQuote(reached)},'yes',$Ascii); try { $Cipher=[IO.File]::ReadAllText(${psQuote(tampered)},$Ascii); $null=ConvertTo-SecureString -String $Cipher; exit 3 } catch { exit 0 }`;
