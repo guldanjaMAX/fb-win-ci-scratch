@@ -78,7 +78,8 @@ function Write-FbStatus {
     }
     if ($Who) { $parts += $Who }
     $parts += $Reason
-    if ($null -ne $N) { $parts += ('n=' + $N.Value) }
+    # Windows PowerShell 5.1 boxes a populated Nullable[int] as Int32; .Value then throws under strict mode.
+    if ($null -ne $N) { $parts += ('n=' + [string][int]$N) }
     if ($Id) { $parts += ('id=' + $Id) }
     if ($Words -and $Words.Count -gt 0) { $parts += ('words=' + ($Words -join ',')) }
     $line = ($parts -join ' ') + "`n"

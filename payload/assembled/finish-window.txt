@@ -78,7 +78,8 @@ function Write-FbStatus {
     }
     if ($Who) { $parts += $Who }
     $parts += $Reason
-    if ($null -ne $N) { $parts += ('n=' + $N.Value) }
+    # Windows PowerShell 5.1 boxes a populated Nullable[int] as Int32; .Value then throws under strict mode.
+    if ($null -ne $N) { $parts += ('n=' + [string][int]$N) }
     if ($Id) { $parts += ('id=' + $Id) }
     if ($Words -and $Words.Count -gt 0) { $parts += ('words=' + ($Words -join ',')) }
     $line = ($parts -join ' ') + "`n"
@@ -1197,6 +1198,37 @@ function Get-FbUpdateRunId {
     return $null
 }
 
+function Write-FbW7StageStatus {
+    param([Parameter(Mandatory=$true)][ValidateRange(1,13)][int]$Stage)
+    # Windows PowerShell 5.1 boxes a populated Nullable[int] as Int32. The
+    # shared formatter's .Value access therefore throws under strict mode.
+    $line = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') + ' W7 INFO stage n=' + [string]$Stage + "`n"
+    [IO.File]::AppendAllText((Join-Path $FB.Run 'status.txt'), $line, $script:FbUtf8)
+}
+
+function Write-FbW7Failed {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet(
+            'start-refused',
+            'start-exception',
+            'recovery-decision-id',
+            'recovery-start',
+            'recovery-result',
+            'complete-runid',
+            'complete-yn-prompt',
+            'complete-verified-line',
+            'complete-retry-declined',
+            'complete-dead-live',
+            'complete-result',
+            'complete-exception'
+        )]
+        [string]$Detail
+    )
+    [IO.File]::WriteAllText((Join-Path $FB.Run 'w7-detail.txt'), ($Detail + "`n"), $script:FbUtf8)
+    Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+}
+
 function Start-FbW7 {
     if (-not $FB.Tier2On) { return 'skip' }
     try {
@@ -1229,7 +1261,7 @@ function Start-FbW7 {
                     return 'pass'
                 }
             }
-            Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+            Write-FbW7Failed -Detail 'start-refused'
             return 'stop'
         }
         $FB.W7RunId = $runId
@@ -1239,7 +1271,7 @@ function Start-FbW7 {
         Show-FbLine -Key 'W7-START'
         return 'pass'
     } catch {
-        Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+        Write-FbW7Failed -Detail 'start-exception'
         return 'stop'
     }
 }
@@ -1272,7 +1304,7 @@ function Wait-FbW7Run {
                         $nextStage = [int]$Matches[1]
                         if ($nextStage -gt $stage) {
                             $stage = $nextStage
-                            Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'stage' -N $stage
+                            Write-FbW7StageStatus -Stage $stage
                             if ($stage -eq 5) { Show-FbLine -Key 'W7-PAUSE20' -Fill @{ k = $stage } }
                             else { Show-FbLine -Key 'W7-STEP' -Fill @{ k = $stage } }
                         }
@@ -1350,17 +1382,17 @@ function Invoke-FbDeployRecovery {
     if ($choice -cne 'deploy-recover') { return 'finish-later' }
     $decisionId = Read-FbDecisionId -Word 'deploy-recover'
     if (-not $decisionId) {
-        Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+        Write-FbW7Failed -Detail 'recovery-decision-id'
         return 'stop'
     }
     $recoverRun = Start-FbStep -Step 'deploy-recover' -WithKey -DecisionId $decisionId
     if (-not $recoverRun) {
-        Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+        Write-FbW7Failed -Detail 'recovery-start'
         return 'stop'
     }
     $recover = Wait-FbStep -RunId $recoverRun -TimeoutSec 910
     if ($recover.Exit -ne 0 -or $recover.Class -cne 'deploy-recovered') {
-        Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+        Write-FbW7Failed -Detail 'recovery-result'
         return 'stop'
     }
     return 'stop'
@@ -1379,7 +1411,7 @@ function Complete-FbW7 {
     try {
         if (-not $RunId) { $RunId = $FB.W7RunId }
         if (-not $RunId) {
-            Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+            Write-FbW7Failed -Detail 'complete-runid'
             return 'stop'
         }
         if ($RunId -cne $FB.W7RunId) { $FB.W7RunId = $RunId }
@@ -1394,7 +1426,7 @@ function Complete-FbW7 {
                 return 'stop'
             }
             if ($result.YnPrompt) {
-                Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+                Write-FbW7Failed -Detail 'complete-yn-prompt'
                 Set-FbProgress -Key 'w7_result' -Value 'stop'
                 return 'stop'
             }
@@ -1402,7 +1434,7 @@ function Complete-FbW7 {
                 $output = Read-FbStepLine $RunId
                 $expected = [regex]::Escape([string]$FB.Facts.kit_version)
                 if ($output -notmatch ('upgrade verified, now at ' + $expected + '(?:\s|$)')) {
-                    Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+                    Write-FbW7Failed -Detail 'complete-verified-line'
                     return 'stop'
                 }
                 Write-FbStatus -Step 'W7' -Code 'PASS' -Reason 'verified'
@@ -1439,23 +1471,23 @@ function Complete-FbW7 {
             if (@('dead','update-busy','network','unknown-update') -ccontains $result.Class) {
                 $choice = Wait-FbDecision -Step 'W7' -Reason 'update-retry' -Words @('continue','stop')
                 if ($choice -cne 'continue') {
-                    Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+                    Write-FbW7Failed -Detail 'complete-retry-declined'
                     return 'stop'
                 }
                 if ($result.Class -ceq 'dead' -and (Test-FbProcesses).Update) {
-                    Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+                    Write-FbW7Failed -Detail 'complete-dead-live'
                     return 'stop'
                 }
                 $RunId = Start-FbW7Retry -Reason 'start'
                 if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
-            Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+            Write-FbW7Failed -Detail 'complete-result'
             Set-FbProgress -Key 'w7_result' -Value 'stop'
             return 'stop'
         }
     } catch {
-        Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
+        Write-FbW7Failed -Detail 'complete-exception'
         return 'stop'
     }
 }
