@@ -134,7 +134,7 @@ test("DPAPI reads in a second process and rejects a tampered copy", { skip: SKIP
   assert.notEqual(changed.toLowerCase(), text.toLowerCase());
   const tampered = join(dir, "tampered.dpapi");
   writeFileSync(tampered, changed, "ascii");
-  const check = `$Ascii=New-Object Text.ASCIIEncoding; [IO.File]::WriteAllText(${psQuote(reached)},'yes',$Ascii); try { $Cipher=[IO.File]::ReadAllText(${psQuote(tampered)},$Ascii); $null=ConvertTo-SecureString -String $Cipher; exit 3 } catch { exit 0 }`;
+  const check = `$Ascii=New-Object Text.ASCIIEncoding; [IO.File]::WriteAllText(${psQuote(reached)},'yes',$Ascii); try { $Cipher=[IO.File]::ReadAllText(${psQuote(tampered)},$Ascii); $null=ConvertTo-SecureString -String $Cipher -ErrorAction Stop; exit 3 } catch { exit 0 }`;
   const rejected = runPs(check);
   assert.equal(existsSync(reached), true);
   assert.equal(rejected.status, 0, spawnDiagnostic(rejected));
