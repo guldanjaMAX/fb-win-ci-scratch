@@ -222,7 +222,7 @@ function failingTapLines(text) {
     if (/^\s*not ok\b/.test(lines[i])) {
       out.push(`fail=${lines[i].trim()}`);
       for (let j = i + 1; j < Math.min(lines.length, i + 12) && !/^\s*(not )?ok\b/.test(lines[j]); j += 1) {
-        if (/error|expected|actual|message|code/i.test(lines[j])) out.push(`  ${lines[j].trim().slice(0, 240)}`);
+        if (lines[j].trim() && out.length < 120) out.push(`  ${lines[j].trim().slice(0, 240)}`);
       }
     }
   }

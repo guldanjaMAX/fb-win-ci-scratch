@@ -30,22 +30,25 @@ function windowsHostLimited(arm) {
   return arm === "A5" || arm.startsWith("A5-") || arm === "A6" || arm.startsWith("A6-") || arm.startsWith("A15-");
 }
 
+let windowsBridgeResult = null;
 function runWindowsArm(arm, runnerDir) {
   if (process.platform !== "win32") throw new Error("windows target requires Windows");
-  const windowPin = runnerPinTable().files.find((entry) => entry.name === "finish-window.txt");
-  const driver = resolve(dirname(fileURLToPath(import.meta.url)), "windows-bridge.ps1");
-  const proc = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", driver, "-RunnerDir", runnerDir, "-ExpectedWindowSha256", windowPin.sha256], {
-    encoding: "utf8",
-    windowsHide: true,
-    shell: false,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  if (proc.status !== 0) throw new Error(`windows bridge failed for ${arm}`);
-  const bridge = JSON.parse(proc.stdout.trim());
+  if (!windowsBridgeResult) {
+    const windowPin = runnerPinTable().files.find((entry) => entry.name === "finish-window.txt");
+    const driver = resolve(dirname(fileURLToPath(import.meta.url)), "windows-bridge.ps1");
+    const proc = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", driver, "-RunnerDir", runnerDir, "-ExpectedWindowSha256", windowPin.sha256], {
+      encoding: "utf8",
+      windowsHide: true,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    if (proc.status !== 0) throw new Error(`windows bridge failed for ${arm}`);
+    windowsBridgeResult = JSON.parse(proc.stdout.trim());
+  }
   const result = runStubArm(arm);
   result.target = "windows";
   result.host_limited = windowsHostLimited(arm);
-  result.meta = { ...result.meta, windowsBridge: bridge, hostLimit: result.host_limited ? "requires dedicated Windows probe" : null };
+  result.meta = { ...result.meta, windowsBridge: windowsBridgeResult, hostLimit: result.host_limited ? "requires dedicated Windows probe" : null };
   return result;
 }
 
