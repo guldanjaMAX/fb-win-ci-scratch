@@ -1,14 +1,15 @@
 {
   "run": ["node", "payload/l4/run-arms.mjs", "--target", "windows", "--runner-dir", "{runner}", "--out", "{out}"],
   "runner_files": {
-    "finish-window.txt": "payload/assembled/finish-window.txt",
-    "phrases.json": "payload/assembled/phrases.json",
     "fb-win.mjs": "payload/l1/fb-win.mjs",
+    "finish-window.txt": "payload/assembled/finish-window.txt",
     "fb-run.mjs": "payload/l2b/fb-run.mjs",
     "fb-drive-state.mjs": "payload/l2a-1/fb-drive-state.mjs",
     "fb-manifest-edit.mjs": "payload/l2a-2/fb-manifest-edit.mjs",
     "fb-kit.mjs": "payload/l2a-2/fb-kit.mjs",
-    "fb-google.mjs": "payload/l2c/fb-google.mjs"
+    "fb-google.mjs": "payload/l2c/fb-google.mjs",
+    "phrases.json": "payload/assembled/phrases.json",
+    "facts.json": "payload/l4/runner/facts.json"
   },
   "result_file": "result.json",
   "control_id": "A0",

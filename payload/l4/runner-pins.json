@@ -1,14 +1,59 @@
 {
   "schema": 1,
   "files": [
-    { "name": "fb-win.mjs", "source": "payload/l1/fb-win.mjs", "bytes": 26530, "sha256": "af3b5dbdf0b9cb21476ad103e27297d1bee66ea4da97c16eb3fc103ab515cc80" },
-    { "name": "finish-window.txt", "source": "payload/assembled/finish-window.txt", "bytes": 77841, "sha256": "2f9ee5f9c4d1213b0564a392e7f0550430ef9a7e573984285798eb8fe2cf096b" },
-    { "name": "fb-run.mjs", "source": "payload/l2b/fb-run.mjs", "bytes": 30208, "sha256": "19016699594b0f12b37c56277c86c6ed6658d848f435b180b946a88c2a12b68b" },
-    { "name": "fb-drive-state.mjs", "source": "payload/l2a-1/fb-drive-state.mjs", "bytes": 3244, "sha256": "7820eb818b787f2bc47ec13736ec3feda541dd280d3a20b7cc45c121bc8e7e63" },
-    { "name": "fb-manifest-edit.mjs", "source": "payload/l2a-2/fb-manifest-edit.mjs", "bytes": 11056, "sha256": "c1a047c3537b480adc9da421a008dfcde4670bedc1c2c86745f8ffe81e028428" },
-    { "name": "fb-kit.mjs", "source": "payload/l2a-2/fb-kit.mjs", "bytes": 5717, "sha256": "47d7dfcbdc8107ef15018ce158c73423900503d657094c4be471301a9344976c" },
-    { "name": "fb-google.mjs", "source": "payload/l2c/fb-google.mjs", "bytes": 10525, "sha256": "3ccf1ea2dd4d9f88941b8f36e9cd21a52804529b88e543783151825199a861b5" },
-    { "name": "phrases.json", "source": "payload/assembled/phrases.json", "bytes": 20704, "sha256": "8641cb67637237b5e1f5f9cb8a67627eac6f9e0e94d9a8dcfdc32891e3c03035" },
-    { "name": "facts.json", "source": "payload/l4/runner/facts.json", "bytes": 636, "sha256": "a976b3db057510a10b61ee973e6cd18921adc143c0ef91eb53b237c6f6497e43" }
+    {
+      "name": "fb-win.mjs",
+      "source": "payload/l1/fb-win.mjs",
+      "bytes": 26530,
+      "sha256": "af3b5dbdf0b9cb21476ad103e27297d1bee66ea4da97c16eb3fc103ab515cc80"
+    },
+    {
+      "name": "finish-window.txt",
+      "source": "payload/assembled/finish-window.txt",
+      "bytes": 77879,
+      "sha256": "566912c959a4c1a6498d438938059fcbc86c6c28f5760033aafcd69cb20ac59d"
+    },
+    {
+      "name": "fb-run.mjs",
+      "source": "payload/l2b/fb-run.mjs",
+      "bytes": 30208,
+      "sha256": "19016699594b0f12b37c56277c86c6ed6658d848f435b180b946a88c2a12b68b"
+    },
+    {
+      "name": "fb-drive-state.mjs",
+      "source": "payload/l2a-1/fb-drive-state.mjs",
+      "bytes": 3244,
+      "sha256": "7820eb818b787f2bc47ec13736ec3feda541dd280d3a20b7cc45c121bc8e7e63"
+    },
+    {
+      "name": "fb-manifest-edit.mjs",
+      "source": "payload/l2a-2/fb-manifest-edit.mjs",
+      "bytes": 11056,
+      "sha256": "c1a047c3537b480adc9da421a008dfcde4670bedc1c2c86745f8ffe81e028428"
+    },
+    {
+      "name": "fb-kit.mjs",
+      "source": "payload/l2a-2/fb-kit.mjs",
+      "bytes": 5717,
+      "sha256": "47d7dfcbdc8107ef15018ce158c73423900503d657094c4be471301a9344976c"
+    },
+    {
+      "name": "fb-google.mjs",
+      "source": "payload/l2c/fb-google.mjs",
+      "bytes": 10525,
+      "sha256": "3ccf1ea2dd4d9f88941b8f36e9cd21a52804529b88e543783151825199a861b5"
+    },
+    {
+      "name": "phrases.json",
+      "source": "payload/assembled/phrases.json",
+      "bytes": 20704,
+      "sha256": "8641cb67637237b5e1f5f9cb8a67627eac6f9e0e94d9a8dcfdc32891e3c03035"
+    },
+    {
+      "name": "facts.json",
+      "source": "payload/l4/runner/facts.json",
+      "bytes": 636,
+      "sha256": "a976b3db057510a10b61ee973e6cd18921adc143c0ef91eb53b237c6f6497e43"
+    }
   ]
 }

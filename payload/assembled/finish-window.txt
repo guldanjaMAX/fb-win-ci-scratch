@@ -39,7 +39,7 @@ function Initialize-FbCore {
     $factsPath = Join-Path $FB.Session 'facts.json'
     if (-not (Test-Path -LiteralPath $factsPath -PathType Leaf)) { throw 'facts missing' }
     if ((Get-Item -LiteralPath $factsPath).Length -gt 1MB) { throw 'facts too large' }
-    $FB.Facts = Get-Content -LiteralPath $factsPath -Raw | ConvertFrom-Json
+    $FB.Facts = Get-Content -LiteralPath (Join-Path $FB.Session 'facts.json') -Raw | ConvertFrom-Json
     $markerPath = Join-Path $FB.Session 'REHEARSAL.marker'
     $markerLines = @()
     if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
@@ -651,7 +651,9 @@ function Get-FbClipboardText {
 function Clear-FbClipboard {
     if ($FB.TestSeam) {
         Remove-Item -LiteralPath (Join-Path $FB.Session 'test-clipboard.txt') -Force -ErrorAction SilentlyContinue
-    } else { Set-Clipboard -Value ' ' }
+    } else {
+        Set-Clipboard -Value ' '
+    }
 }
 
 function Find-FbClipboardCandidates {

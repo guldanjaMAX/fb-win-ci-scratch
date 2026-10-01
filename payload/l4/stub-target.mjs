@@ -48,7 +48,7 @@ export function runStubArm(id) {
           TMPDIR: process.env.TMPDIR || tmpdir(),
           BRAIN_NO_WRANGLER_LOGIN: "1",
           BRAIN_GOOGLE_TOKEN_STORE: "file",
-          ...(cliCommands.includes(probe.command) ? { CLOUDFLARE_API_TOKEN: key } : {})
+          ...(["update", "verify", "deploy"].includes(probe.command) ? { CLOUDFLARE_API_TOKEN: key } : {})
         }
       });
       if (run.status === 0) successful += 1;
