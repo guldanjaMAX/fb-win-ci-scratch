@@ -46,6 +46,21 @@ test("real npm protects the fixture key without reparsing the apostrophe path", 
   assert.match(writer, /input: key/u);
 });
 
+test("real npm starts from an npm-owned 0.4.8 package and keeps the foreign-shim control", () => {
+  assert.match(arms, /id: "R-NPM"[\s\S]*id: "R-NPM-FOREIGN"/u, "the positive arm precedes its negative control");
+  assert.match(source, /name: "brain-installer"[\s\S]*version: "0\.4\.8"/u, "the local baseline package matches the installed predecessor");
+  assert.match(source, /const bins = \{[\s\S]*brain: "\.\/brain\.mjs"/u, "the predecessor package owns the primary launcher");
+  assert.match(source, /"brain-v048-disposable-deploy"[\s\S]*"brain-v048-disposable-closeout"/u, "the baseline owns every predecessor bin shim");
+  assert.match(source, /npmPack[\s\S]*"pack"[\s\S]*"--offline"/u, "the baseline is packed locally without network access");
+  assert.match(source, /for \(const name of \["brain\.cmd", "brain", "brain\.ps1"\]\)[\s\S]*rmSync/u, "foreign launchers are removed before the owned install");
+  assert.match(source, /npmInstall[\s\S]*"install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "--offline"/u, "the baseline is installed by real npm without force");
+  assert.match(source, /npmList[\s\S]*"ls", "--global", "--prefix"[\s\S]*brain-installer/u, "npm ls proves the installed baseline version");
+  assert.ok(source.includes("/node_modules[\\\\/]brain-installer[\\\\/]brain\\.mjs/iu"), "the npm shim resolves into the installed package");
+  assert.match(source, /const stubVersion = [^\n]*"0\.4\.8"/u, "the installed baseline still serves the W1 version read");
+  assert.match(source, /R-NPM-FOREIGN[\s\S]*EEXIST/u, "the foreign shim control requires the observed npm refusal");
+  assert.doesNotMatch(source, /npmInstall[^\n]*--force/u);
+});
+
 test("interactive host arms remain explicitly bounded", () => {
   assert.match(source, /\["A6", "A6-hidden", "A15-dead", "A15-preview", "A15-scope", "A15-partial", "A15-full"\]/u);
   assert.match(source, /interactive consent screen/u);

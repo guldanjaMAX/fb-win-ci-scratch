@@ -11,7 +11,7 @@ const reasons = new Map([
   ["W3", new Set(["key-start", "key-file-found", "key-file-rejected", "got-it", "two-candidates", "history-deleted", "history-delete-failed", "copy-key", "key-checked", "key-bad", "key-saved", "save-failed", "verify-network", "nudge", "two-bad", "key-visible", "timeout", "history-unproven", "history-cloud"])],
   ["W4", new Set(["queue-zero", "pending", "projection", "queue", "wait-elapsed", "finish-later"])],
   ["W5", new Set(["drive-not-terminal"])],
-  ["W6", new Set(["sha", "load-running", "payload-proven"])],
+  ["W6", new Set(["sha", "install", "load-running", "payload-proven"])],
   ["W7", new Set(["start", "stage", "rejoin", "recovered", "retry-cpu-reset", "retry-last-stage-503", "verified", "pending-migration-seen", "queue-not-empty", "update-retry", "update-queued", "queued", "failed", "second-failure", "pending-migration"])],
   ["W8", new Set(["check-start", "calendar-ok", "reconnect-needed", "connected", "scopes-all", "scope-missing-drive", "scope-missing-gmail", "scope-missing-calendar", "account-changed", "account-same", "account-unknown", "restored", "kept", "sac-refused", "google-partial", "google-account", "google-consent", "off", "google-busy", "google-none", "consent-not-finished", "check-failed", "connect-failed"])],
   ["W11", new Set(["key-removed", "done"])]
@@ -110,10 +110,23 @@ export function verifyArm(result) {
   if (["A11", "A11-empty", "A11-probe"].includes(result.arm) && result.meta.windowOpened !== false) errors.push("tier gate opened window");
   if (result.arm === "A14" && (result.meta.keyRead || !result.meta.plantedDailyCaught)) errors.push("daily action key-read control failed");
   if (result.arm === "R-NPM" && (
-    result.meta.realNpm !== true || result.meta.realCliVersion !== true ||
+    result.meta.installAttempted !== true || result.meta.realNpm !== true || result.meta.realCliVersion !== true ||
     result.meta.cachedKit !== false || result.meta.cloudflareConnections !== 0 ||
-    result.meta.hostsRestored !== true || result.meta.writeCommandsStarted !== 0
+    result.meta.hostsRestored !== true || result.meta.registryRestored !== true ||
+    result.meta.writeCommandsStarted !== 0 || result.meta.previewSafety !== true ||
+    result.meta.startingState?.fixtureKind !== "npm-owned" || result.meta.startingState?.pass !== true ||
+    result.meta.startingState?.packExit !== 0 || result.meta.startingState?.installExit !== 0 ||
+    result.meta.startingState?.brainCmdExists !== true ||
+    result.meta.startingState?.brainCmdOwned !== true || result.meta.startingState?.npmListVersion !== true ||
+    result.meta.startingState?.stubVersion !== true
   )) errors.push("real npm safety proof failed");
+  if (result.arm === "R-NPM-FOREIGN" && (
+    result.meta.installAttempted !== true || result.meta.foreignEexist !== true || result.meta.realNpm !== false ||
+    result.meta.cloudflareConnections !== 0 || result.meta.hostsRestored !== true ||
+    result.meta.registryRestored !== true || result.meta.writeCommandsStarted !== 0 ||
+    result.meta.startingState?.fixtureKind !== "foreign" || result.meta.startingState?.pass !== true ||
+    result.meta.startingState?.brainCmdExists !== true || result.meta.startingState?.brainCmdOwned !== false
+  )) errors.push("foreign npm refusal proof failed");
   if (["R-REG", "R-REG-control"].includes(result.arm) && (
     result.meta.registryRead !== "real" || result.meta.registryRestored !== true
   )) errors.push("real registry proof failed");

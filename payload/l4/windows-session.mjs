@@ -698,9 +698,127 @@ function installHostsGuard() {
   };
 }
 
+function setPredecessorStubVersion(fixture) {
+  const scenarioPath = join(fixture.prefix, "scenario.json");
+  const scenario = JSON.parse(readFileSync(scenarioPath, "utf8"));
+  scenario.version = "0.4.8";
+  writeJson(scenarioPath, scenario);
+}
+
+function inspectForeignPredecessor(fixture) {
+  const brainCmd = join(fixture.prefix, "brain.cmd");
+  const brainCmdExists = existsSync(brainCmd);
+  const brainCmdText = brainCmdExists ? readFileSync(brainCmd, "utf8") : "";
+  const brainCmdOwned = /node_modules[\\/]brain-installer[\\/]brain\.mjs/iu.test(brainCmdText);
+  return {
+    pass: brainCmdExists && !brainCmdOwned,
+    fixtureKind: "foreign",
+    brainCmdExists,
+    brainCmdOwned,
+    npmListVersion: false,
+    stubVersion: false,
+  };
+}
+
+function prepareNpmOwnedPredecessor(fixture, node, env) {
+  const sourceDir = join(dirname(fixture.prefix), "npm-owned-0.4.8-source");
+  const packDir = join(dirname(fixture.prefix), "npm-owned-0.4.8-pack");
+  const cacheDir = join(dirname(fixture.prefix), "npm-owned-0.4.8-cache");
+  const packageDir = join(fixture.prefix, "node_modules", "brain-installer");
+  const bins = {
+    brain: "./brain.mjs",
+    "brain-v048-disposable-deploy": "./noop.mjs",
+    "brain-v048-disposable-keychain-prep": "./noop.mjs",
+    "brain-v048-disposable-target-eval": "./noop.mjs",
+    "brain-v048-disposable-teardown": "./noop.mjs",
+    "brain-v048-disposable-closeout": "./noop.mjs",
+  };
+  for (const path of [sourceDir, packDir, cacheDir]) mkdirSync(path, { recursive: true });
+  writeJson(join(sourceDir, "package.json"), {
+    name: "brain-installer",
+    version: "0.4.8",
+    type: "module",
+    bin: bins,
+  });
+  writeFileSync(join(sourceDir, "brain.mjs"), "#!/usr/bin/env node\nimport \"./stub-brain.mjs\";\n", "utf8");
+  copyFileSync(join(here, "stub", "brain.mjs"), join(sourceDir, "stub-brain.mjs"));
+  writeFileSync(join(sourceDir, "noop.mjs"), "#!/usr/bin/env node\nprocess.exitCode = 0;\n", "utf8");
+  const npmEnv = {
+    ...env,
+    npm_config_cache: cacheDir,
+    npm_config_offline: "true",
+    npm_config_update_notifier: "false",
+  };
+  const npmPack = runQuiet(node.executable, [
+    node.npmCli, "pack", sourceDir, "--ignore-scripts", "--json", "--pack-destination", packDir, "--offline",
+  ], { cwd: dirname(fixture.prefix), env: npmEnv });
+  const archive = join(packDir, "brain-installer-0.4.8.tgz");
+  for (const name of ["brain.cmd", "brain", "brain.ps1"]) rmSync(join(fixture.prefix, name), { force: true });
+  rmSync(packageDir, { recursive: true, force: true });
+  const npmInstall = runQuiet(node.executable, [
+    node.npmCli, "install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "--offline",
+    "--prefix", fixture.prefix, archive,
+  ], { cwd: dirname(fixture.prefix), env: npmEnv });
+  const brainCmd = join(fixture.prefix, "brain.cmd");
+  const brainCmdExists = existsSync(brainCmd);
+  const brainCmdText = brainCmdExists ? readFileSync(brainCmd, "utf8") : "";
+  const brainCmdOwned = /node_modules[\\/]brain-installer[\\/]brain\.mjs/iu.test(brainCmdText);
+  const npmList = runQuiet(node.executable, [
+    node.npmCli, "ls", "--global", "--prefix", fixture.prefix, "--depth=0", "--json", "--offline",
+  ], { cwd: dirname(fixture.prefix), env: npmEnv });
+  let npmListVersion = false;
+  try {
+    npmListVersion = JSON.parse(npmList.stdout || "{}")?.dependencies?.["brain-installer"]?.version === "0.4.8";
+  } catch {
+    npmListVersion = false;
+  }
+  const stubRead = runQuiet(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "brain.cmd --version"], {
+    cwd: fixture.prefix,
+    env: npmEnv,
+  });
+  const stubVersion = stubRead.status === 0 && (stubRead.stdout || "").trim() === "0.4.8";
+  return {
+    pass: npmPack.status === 0 && npmInstall.status === 0 && npmList.status === 0 &&
+      brainCmdExists && brainCmdOwned && npmListVersion && stubVersion,
+    fixtureKind: "npm-owned",
+    packExit: npmPack.status,
+    installExit: npmInstall.status,
+    brainCmdExists,
+    brainCmdOwned,
+    npmListVersion,
+    stubVersion,
+  };
+}
+
 async function runRealNpmArm(args, spec) {
   const root = resolve(args.sessionRoot);
   const { fixture, node, key, env } = initializeSpecialFixture(args, root, { realNode: true });
+  setPredecessorStubVersion(fixture);
+  const foreignControl = args.arm === "R-NPM-FOREIGN";
+  const startingState = foreignControl
+    ? inspectForeignPredecessor(fixture)
+    : prepareNpmOwnedPredecessor(fixture, node, env);
+  if (!startingState.pass) {
+    writeSpecialResult({
+      arm: args.arm,
+      id: args.arm,
+      target: "windows",
+      status: "fail",
+      host_limited: false,
+      decision_point: { required: spec.point, reached: false, source: "session", evidence: "pre-window fixture proof failed" },
+      status_lines: [],
+      calls: [],
+      stub_call_count: 0,
+      leak_scan_counts: { key: 0, account: 0, host: 0, email: 0, hex24: 0 },
+      meta: {
+        sessionEvidence: false,
+        bridge: null,
+        actualStatusCount: 0,
+        startingState,
+      },
+    });
+    return;
+  }
   const sessionFacts = JSON.parse(readFileSync(join(fixture.session, "facts.json"), "utf8"));
   Object.assign(sessionFacts, {
     kit_url: PUBLISHED_KIT.url,
@@ -761,6 +879,10 @@ async function runRealNpmArm(args, spec) {
   actualStatus = lines(join(fixture.run, "status.txt"));
   const projected = projectStatus(actualStatus, spec.statuses);
   const install = stepExit(fixture.session, "kit-install");
+  const installOutputPath = install ? join(install.folder, "out.log") : null;
+  const installOutput = installOutputPath && existsSync(installOutputPath) ? readFileSync(installOutputPath, "utf8") : "";
+  const installAttempted = Boolean(install);
+  const foreignEexist = foreignControl && /^EXIT 1 /u.test(install?.line || "") && /\bEEXIST\b/u.test(installOutput);
   const kitPath = join(fixture.run, "kit", "brain-installer.tgz");
   const exactKit = existsSync(kitPath) && statSync(kitPath).size === PUBLISHED_KIT.bytes && sha256(readFileSync(kitPath)) === PUBLISHED_KIT.sha256;
   const wrapperReceiptPath = join(fixture.run, "real-npm.json");
@@ -771,17 +893,27 @@ async function runRealNpmArm(args, spec) {
   const cloudflareConnections = cloudflareGuard.count();
   const realNpm = /^EXIT 0 /u.test(install?.line || "") && exactKit && wrapperInstalled;
   const realCliVersion = wrapperReceipt.version_delegate_exit === 0 && wrapperReceipt.version_match === true;
-  const reached = !voidState.void && projected.complete && Boolean(receipt?.pass) && realNpm && realCliVersion &&
-    wrapperReceipt.preview_safety === true && cloudflareConnections === 0 && hostsRestored && registryRestored && writeCommandsStarted === 0;
+  const commonProof = !voidState.void && projected.complete && Boolean(receipt?.pass) &&
+    cloudflareConnections === 0 && hostsRestored && registryRestored && writeCommandsStarted === 0;
+  const reached = foreignControl
+    ? commonProof && foreignEexist && startingState.pass
+    : commonProof && realNpm && realCliVersion && wrapperReceipt.preview_safety === true && startingState.pass;
   writeSpecialResult({
     arm: args.arm,
     id: args.arm,
     target: "windows",
     status: voidState.void ? "void" : reached ? "pass" : "fail",
     host_limited: false,
-    decision_point: { required: spec.point, reached, source: "session", evidence: `status=${actualStatus.length} npm=${realNpm} version=${realCliVersion}` },
+    decision_point: {
+      required: spec.point,
+      reached,
+      source: "session",
+      evidence: foreignControl
+        ? `status=${actualStatus.length} install=${installAttempted} eexist=${foreignEexist}`
+        : `status=${actualStatus.length} start=${startingState.pass} npm=${realNpm} version=${realCliVersion}`,
+    },
     status_lines: projected.lines,
-    calls: realNpm ? [{ command: "npm-cli.js", key: false }] : [],
+    calls: installAttempted ? [{ command: "npm-cli.js", key: false }] : [],
     stub_call_count: stepMetaCalls(fixture.session).length,
     leak_scan_counts: leaks,
     meta: {
@@ -791,8 +923,11 @@ async function runRealNpmArm(args, spec) {
       harnessVoid: voidState.void,
       emptyExpectedStubCalls: voidState.silent,
       emptyExpectedStubSteps: voidState.empty,
+      startingState,
+      installAttempted,
       realNpm,
       realCliVersion,
+      foreignEexist,
       cachedKit: false,
       cloudflareConnections,
       hostsRestored,
@@ -1031,7 +1166,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const spec = armMap.get(args.arm);
   if (!spec) throw new Error("unknown arm");
-  if (args.arm === "R-NPM") return runRealNpmArm(args, spec);
+  if (["R-NPM", "R-NPM-FOREIGN"].includes(args.arm)) return runRealNpmArm(args, spec);
   if (["R-REG", "R-REG-control"].includes(args.arm)) return runRegistryArm(args, spec);
   if (args.arm === "R-CLOSE") return runCloseArm(args, spec);
   const root = resolve(args.sessionRoot);
