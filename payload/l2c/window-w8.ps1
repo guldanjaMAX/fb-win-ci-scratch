@@ -19,11 +19,14 @@ function Invoke-FbW8 {
     }
 
     function Invoke-FbW8Step {
-        param([string]$Name, [string]$Variant = "")
+        param([string]$Name, [string]$Variant = "", [switch]$Safety)
         if ($Variant) { $runId = Start-FbStep -Step $Name -Variant $Variant }
         else { $runId = Start-FbStep -Step $Name }
-        if (-not $runId) { return @{ Exit = 3; Class = "refused"; Events = @() } }
-        return Wait-FbStep -RunId $runId -TimeoutSec (Get-FbW8Remaining)
+        if (-not $runId) { return @{ Exit = 3; Class = "refused"; Events = @(); RunId = $null } }
+        $timeout = if ($Safety) { 130 } else { Get-FbW8Remaining }
+        $result = Wait-FbStep -RunId $runId -TimeoutSec $timeout
+        $result['RunId'] = $runId
+        return $result
     }
 
     function Complete-FbW8Local {
@@ -33,8 +36,29 @@ function Invoke-FbW8 {
     }
 
     function Invoke-FbW8Discard {
-        Invoke-FbW8Step -Name google-discard | Out-Null
-        Set-FbProgress -Key w8_backup -Value none | Out-Null
+        $discard = Invoke-FbW8Step -Name google-discard -Safety
+        if ((Get-FbW8Fact -Result $discard -Name discard) -in @("yes", "none")) {
+            Set-FbProgress -Key w8_backup -Value none | Out-Null
+            return $true
+        }
+        return $false
+    }
+
+    function Invoke-FbW8Restore {
+        $restore = Invoke-FbW8Step -Name google-restore -Safety
+        if ((Get-FbW8Fact -Result $restore -Name restore) -eq "done") {
+            Set-FbProgress -Key w8_backup -Value none | Out-Null
+            Write-FbStatus -Step W8 -Code INFO -Reason restored
+            return $true
+        }
+        return $false
+    }
+
+    function Confirm-FbW8ConnectExit {
+        param($Result)
+        if (-not $Result.RunId) { return $false }
+        if ($Result.Class -notin @("timeout", "dead")) { return $true }
+        return Stop-FbStep -RunId $Result.RunId
     }
 
     function Test-FbW8Lease {
@@ -72,7 +96,12 @@ function Invoke-FbW8 {
         return (Complete-FbW8Local -Value busy -ReturnValue skip)
     }
 
-    if ((Get-FbProgress -Key w8_backup) -eq "present") { Invoke-FbW8Discard }
+    if ((Get-FbProgress -Key w8_backup) -eq "present") {
+        if (-not (Invoke-FbW8Restore)) {
+            Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
+            return (Complete-FbW8Local -Value restore-failed -ReturnValue stop)
+        }
+    }
     Show-FbLine -Key W8-CHECK
     Write-FbStatus -Step W8 -Code INFO -Reason check-start
 
@@ -127,7 +156,6 @@ function Invoke-FbW8 {
         if (-not (Test-FbW8Lease)) {
             Write-FbStatus -Step W8 -Code SKIP -Reason google-busy
             Show-FbLine -Key W8-BUSY
-            Invoke-FbW8Discard
             return (Complete-FbW8Local -Value busy -ReturnValue skip)
         }
         if ((Get-FbProgress -Key w8_backup) -ne "present") {
@@ -158,20 +186,29 @@ function Invoke-FbW8 {
             Write-FbStatus -Step W8 -Code INFO -Reason connected
         }
         elseif ($connectResult.Class -eq "consent-not-finished") {
+            if (-not (Confirm-FbW8ConnectExit -Result $connectResult) -or -not (Invoke-FbW8Restore)) {
+                Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
+                return (Complete-FbW8Local -Value restore-failed -ReturnValue stop)
+            }
             Write-FbStatus -Step W8 -Code SKIP -Reason consent-not-finished
             Show-FbLine -Key W8-NOT-FINISHED
-            Invoke-FbW8Discard
             return (Complete-FbW8Local -Value consent-not-finished -ReturnValue skip)
         }
         elseif ($connectResult.Class -eq "google-busy") {
+            if (-not (Confirm-FbW8ConnectExit -Result $connectResult) -or -not (Invoke-FbW8Restore)) {
+                Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
+                return (Complete-FbW8Local -Value restore-failed -ReturnValue stop)
+            }
             Write-FbStatus -Step W8 -Code SKIP -Reason google-busy
             Show-FbLine -Key W8-BUSY
-            Invoke-FbW8Discard
             return (Complete-FbW8Local -Value busy -ReturnValue skip)
         }
         else {
+            if (-not (Confirm-FbW8ConnectExit -Result $connectResult) -or -not (Invoke-FbW8Restore)) {
+                Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
+                return (Complete-FbW8Local -Value restore-failed -ReturnValue stop)
+            }
             Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
-            Invoke-FbW8Discard
             return (Complete-FbW8Local -Value connect-failed -ReturnValue stop)
         }
 
@@ -191,7 +228,10 @@ function Invoke-FbW8 {
         if ($missing.Count -eq 0 -and @("same", "unknown") -contains $account) {
             Write-FbStatus -Step W8 -Code PASS -Reason scopes-all
             Show-FbLine -Key W8-ALL
-            Invoke-FbW8Discard
+            if (-not (Invoke-FbW8Discard)) {
+                Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
+                return (Complete-FbW8Local -Value discard-failed -ReturnValue stop)
+            }
             return (Complete-FbW8Local -Value scopes-all -ReturnValue pass)
         }
 
@@ -201,26 +241,27 @@ function Invoke-FbW8 {
         foreach ($scope in $missing) {
             if ($oldGrant[$scope] -eq "yes") { $regression = $true }
         }
-        if ($regression) { $default = "restore" } else { $default = "keep" }
+        if ($regression) { $default = "restore"; $words = @("restore", "retry") } else { $default = "keep"; $words = @("restore", "keep", "retry") }
         $waitReason = "google-partial"
         if ($account -eq "changed") { $waitReason = "google-account" }
         $waitSeconds = [Math]::Min(300, (Get-FbW8Remaining))
-        $decision = Wait-FbDecision -Step W8 -Reason $waitReason -Words @("restore", "keep", "retry") -DefaultAfterSec $waitSeconds -Default $default
+        $decision = Wait-FbDecision -Step W8 -Reason $waitReason -Words $words -DefaultAfterSec $waitSeconds -Default $default
         if ($decision -eq "retry" -and $retryCount -eq 0) {
             $retryCount = 1
             continue
         }
+        if ($decision -eq "retry") { $decision = "restore" }
         if ($decision -eq "restore") {
-            $restoreResult = Invoke-FbW8Step -Name google-restore
-            if ((Get-FbW8Fact -Result $restoreResult -Name restore) -eq "done") {
-                Set-FbProgress -Key w8_backup -Value none | Out-Null
-                Write-FbStatus -Step W8 -Code INFO -Reason restored
+            if (Invoke-FbW8Restore) {
                 return (Complete-FbW8Local -Value restored -ReturnValue pass)
             }
             Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
             return (Complete-FbW8Local -Value restore-failed -ReturnValue stop)
         }
-        Invoke-FbW8Discard
+        if (-not (Invoke-FbW8Discard)) {
+            Write-FbStatus -Step W8 -Code STOP -Reason connect-failed
+            return (Complete-FbW8Local -Value discard-failed -ReturnValue stop)
+        }
         Write-FbStatus -Step W8 -Code INFO -Reason kept
         return (Complete-FbW8Local -Value kept -ReturnValue pass)
     }

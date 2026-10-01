@@ -4,20 +4,20 @@
     {
       "name": "fb-win.mjs",
       "source": "payload/l1/fb-win.mjs",
-      "bytes": 26530,
-      "sha256": "af3b5dbdf0b9cb21476ad103e27297d1bee66ea4da97c16eb3fc103ab515cc80"
+      "bytes": 27035,
+      "sha256": "2a29524f0e30d3f84d1b50a2dc830467a9b10c422e78259544be3647fc174c10"
     },
     {
       "name": "finish-window.txt",
       "source": "payload/assembled/finish-window.txt",
-      "bytes": 77879,
-      "sha256": "566912c959a4c1a6498d438938059fcbc86c6c28f5760033aafcd69cb20ac59d"
+      "bytes": 83661,
+      "sha256": "5dfbec6b3ab84591badc5c453827dc669fd6e00c2f5a1de9c50ce7218fe9de3c"
     },
     {
       "name": "fb-run.mjs",
       "source": "payload/l2b/fb-run.mjs",
-      "bytes": 30208,
-      "sha256": "19016699594b0f12b37c56277c86c6ed6658d848f435b180b946a88c2a12b68b"
+      "bytes": 32910,
+      "sha256": "29b0e57fc85a19590b647bcb0ed02468a12096fb906100af1f5e0c52289c3e2b"
     },
     {
       "name": "fb-drive-state.mjs",
@@ -52,8 +52,8 @@
     {
       "name": "facts.json",
       "source": "payload/l4/runner/facts.json",
-      "bytes": 636,
-      "sha256": "a976b3db057510a10b61ee973e6cd18921adc143c0ef91eb53b237c6f6497e43"
+      "bytes": 644,
+      "sha256": "3135fd864b8bc525e868515d561ebb8f22f85b8787ea6f09e0ddaf56c0e69f01"
     }
   ]
 }

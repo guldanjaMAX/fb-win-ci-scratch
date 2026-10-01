@@ -87,7 +87,11 @@ function Invoke-FbW6 {
         if ($processes.Load) {
             $choice = Wait-FbDecision -Step 'W6' -Reason 'load-running' -Words @('wait','finish-later')
             if ($choice -cne 'wait') { return 'finish-later' }
-            Start-Sleep -Seconds (Get-FbScaledSeconds 300)
+            $waitUntil = [DateTime]::UtcNow.AddSeconds((Get-FbScaledSeconds 300))
+            while ([DateTime]::UtcNow -lt $waitUntil) {
+                Start-Sleep -Seconds ([Math]::Min((Get-FbScaledSeconds 120), [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
+                Write-FbStatus -Step 'W6' -Code 'INFO' -Reason 'heartbeat'
+            }
             $processes = Test-FbProcesses
             if ($processes.Load) { return 'finish-later' }
         }
@@ -113,6 +117,10 @@ function Invoke-FbW6 {
         $installAttempt = 0
         while ($true) {
             $installAttempt++
+            if ((Test-FbProcesses).Load) {
+                Write-FbStatus -Step 'W6' -Code 'SKIP' -Reason 'load-running'
+                return 'finish-later'
+            }
             $installRun = Start-FbStep -Step 'kit-install'
             if (-not $installRun) {
                 Write-FbStatus -Step 'W6' -Code 'STOP' -Reason 'install'
@@ -210,6 +218,7 @@ function Start-FbW7 {
             return 'stop'
         }
         $FB.W7RunId = $runId
+        if (-not (Get-FbProgress -Key 'w7_total_attempts')) { Set-FbProgress -Key 'w7_total_attempts' -Value '1' }
         Set-FbProgress -Key 'w7_runid' -Value $runId
         Write-FbStatus -Step 'W7' -Code 'START' -Reason 'start'
         Show-FbLine -Key 'W7-START'
@@ -230,6 +239,7 @@ function Wait-FbW7Run {
     $seen = 0
     $stage = 0
     $lastLineAt = [DateTime]::UtcNow
+    $lastHeartbeat = [DateTime]::UtcNow
     $silenceReported = $false
     $pending = $false
     $agentWarning = $false
@@ -289,14 +299,22 @@ function Wait-FbW7Run {
             Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'silent-15min'
             $silenceReported = $true
         }
+        if (([DateTime]::UtcNow - $lastHeartbeat).TotalSeconds -ge (Get-FbScaledSeconds 120)) {
+            Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'heartbeat'
+            $lastHeartbeat = [DateTime]::UtcNow
+        }
         Start-Sleep -Seconds 2
     }
 }
 
 function Start-FbW7Retry {
     param([string]$Reason)
+    $attempts = Get-FbProgress -Key 'w7_total_attempts'
+    if (-not $attempts) { $attempts = '1' }
+    if ([int]$attempts -ge 2) { return $null }
     $runId = Start-FbStep -Step 'update' -WithKey
     if (-not $runId) { return $null }
+    Set-FbProgress -Key 'w7_total_attempts' -Value ([string]([int]$attempts + 1))
     $FB.W7RunId = $runId
     Set-FbProgress -Key 'w7_runid' -Value $runId
     Write-FbStatus -Step 'W7' -Code 'INFO' -Reason $Reason
@@ -353,7 +371,6 @@ function Complete-FbW7 {
         if ($FB.Rejoin -or $RunId -ceq $FB.RejoinRunId) {
             Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'rejoin'
         }
-        $manualRetryUsed = $false
         while ($true) {
             $result = Wait-FbW7Run -RunId $RunId
             if ($result.Pending) {
@@ -395,23 +412,13 @@ function Complete-FbW7 {
                 return Invoke-FbDeployRecovery
             }
             if ($result.Class -ceq 'cpu-reset') {
-                if ((Get-FbProgress -Key 'w7_retry_cpu') -ceq '1') {
-                    Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'
-                    return 'stop'
-                }
-                Set-FbProgress -Key 'w7_retry_cpu' -Value '1'
                 $RunId = Start-FbW7Retry -Reason 'retry-cpu-reset'
-                if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'; return 'stop' }
+                if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
             if ($result.Class -ceq 'last-stage-503') {
-                if ((Get-FbProgress -Key 'w7_retry_503') -ceq '1') {
-                    Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'
-                    return 'stop'
-                }
-                Set-FbProgress -Key 'w7_retry_503' -Value '1'
                 $RunId = Start-FbW7Retry -Reason 'retry-last-stage-503'
-                if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'; return 'stop' }
+                if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
             if (@('dead','update-busy','network','unknown-update') -ccontains $result.Class) {
@@ -420,17 +427,12 @@ function Complete-FbW7 {
                     Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
                     return 'stop'
                 }
-                if ($manualRetryUsed) {
-                    Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'
-                    return 'stop'
-                }
                 if ($result.Class -ceq 'dead' -and (Test-FbProcesses).Update) {
                     Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
                     return 'stop'
                 }
-                $manualRetryUsed = $true
                 $RunId = Start-FbW7Retry -Reason 'start'
-                if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'; return 'stop' }
+                if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
             Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { allArmIds, detectSuspect, simulateArm, verifyArm } from "./reference/oracle.mjs";
 import { runnerPinTable, verifyRunnerArtifacts } from "./artifact-pins.mjs";
 import { runStubArm } from "./stub-target.mjs";
+import { validateRealSessionEvidence } from "./real-session-evidence.mjs";
 
 function parseArgs(argv) {
   const out = { arms: [] };
@@ -26,29 +27,26 @@ function selectedArms(requested) {
   return ["A0", ...chosen.filter((id) => id !== "A0")];
 }
 
-function windowsHostLimited(arm) {
-  return arm === "A5" || arm.startsWith("A5-") || arm === "A6" || arm.startsWith("A6-") || arm.startsWith("A15-");
-}
-
-let windowsBridgeResult = null;
-function runWindowsArm(arm, runnerDir) {
+function runWindowsArm(arm, runnerDir, armOut) {
   if (process.platform !== "win32") throw new Error("windows target requires Windows");
-  if (!windowsBridgeResult) {
-    const windowPin = runnerPinTable().files.find((entry) => entry.name === "finish-window.txt");
-    const driver = resolve(dirname(fileURLToPath(import.meta.url)), "windows-bridge.ps1");
-    const proc = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", driver, "-RunnerDir", runnerDir, "-ExpectedWindowSha256", windowPin.sha256], {
-      encoding: "utf8",
-      windowsHide: true,
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    if (proc.status !== 0) throw new Error(`windows bridge failed for ${arm}`);
-    windowsBridgeResult = JSON.parse(proc.stdout.trim());
+  const windowPin = runnerPinTable().files.find((entry) => entry.name === "finish-window.txt");
+  const driver = resolve(dirname(fileURLToPath(import.meta.url)), "windows-session.mjs");
+  const proc = spawnSync(process.execPath, [driver, "--arm", arm, "--runner-dir", runnerDir, "--session-root", resolve(armOut, "real-session"), "--expected-window-sha256", windowPin.sha256], {
+    encoding: "utf8",
+    windowsHide: true,
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const line = proc.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
+  if (!line) throw new Error(`windows session produced no result for ${arm}`);
+  const result = JSON.parse(line);
+  result.meta = { ...result.meta, sessionRunnerExit: proc.status, hostLimit: result.host_limited ? result.host_limit_reason : null };
+  const evidence = validateRealSessionEvidence(result);
+  result.meta = { ...result.meta, realSessionEvidencePass: evidence.pass, realSessionEvidenceErrors: evidence.errors };
+  if (!evidence.pass) {
+    result.status = "fail";
+    result.errors = [...(result.errors || []), ...evidence.errors];
   }
-  const result = runStubArm(arm);
-  result.target = "windows";
-  result.host_limited = windowsHostLimited(arm);
-  result.meta = { ...result.meta, windowsBridge: windowsBridgeResult, hostLimit: result.host_limited ? "requires dedicated Windows probe" : null };
   return result;
 }
 
@@ -65,18 +63,19 @@ for (const arm of arms) {
   if (arm !== "A0" && !controlPassed) throw new Error("A0 did not pass in this run");
   const armOut = resolve(args.out, arm);
   mkdirSync(armOut, { recursive: true });
-  const result = args.target === "oracle" ? simulateArm(arm) : args.target === "stub" ? runStubArm(arm) : runWindowsArm(arm, args.runnerDir);
+  const result = args.target === "oracle" ? simulateArm(arm) : args.target === "stub" ? runStubArm(arm) : runWindowsArm(arm, args.runnerDir, armOut);
   result.id = arm;
   const checked = verifyArm(result);
-  result.status = checked.pass ? "pass" : "fail";
-  result.errors = checked.errors;
+  if (!result.host_limited) result.status = checked.pass && (args.target !== "windows" || result.meta.realSessionEvidencePass === true) ? "pass" : "fail";
+  else result.status = result.meta.realSessionEvidencePass === true ? "skip" : "fail";
+  result.errors = [...(result.meta.realSessionEvidenceErrors || []), ...checked.errors];
   writeFileSync(resolve(armOut, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   results.push(result);
-  if (arm === "A0") controlPassed = checked.pass;
-  console.log(`${checked.pass ? "PASS" : "FAIL"} ${arm} point=${result.decision_point?.reached ? "reached" : "missed"}`);
+  if (arm === "A0") controlPassed = result.status === "pass";
+  console.log(`${result.status === "pass" || result.status === "skip" ? result.status.toUpperCase() : "FAIL"} ${arm} point=${result.decision_point?.reached ? "reached" : "missed"}`);
 }
 const suspect = detectSuspect(results);
 if (suspect.suspect) console.log(`HARNESS SUSPECT: uniform results (${suspect.reason})`);
 const summary = { target: args.target, arms: results.length, passed: results.filter((result) => result.status === "pass").length, host_limited: results.filter((result) => result.host_limited).length, suspect };
 writeFileSync(resolve(args.out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
-process.exitCode = results.every((result) => result.status === "pass") && !suspect.suspect ? 0 : 1;
+process.exitCode = results.every((result) => result.status === "pass" || (result.status === "skip" && result.host_limited)) && !suspect.suspect ? 0 : 1;

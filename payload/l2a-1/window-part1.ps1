@@ -221,6 +221,7 @@ function Invoke-FbW1 {
             $choice = Wait-FbDecision -Step 'W1' -Reason 'brain-paused' -Words @('continue','deploy-recover','finish-later')
             if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
             $FB.PausedChoice = $choice
+            $FB.PausedDecisionId = $FB.LastDecisionId
             if ($choice -ceq 'finish-later') { return 'finish-later' }
         }
         return 'pass'
@@ -257,12 +258,14 @@ function Find-FbClipboardCandidates {
     return @($found)
 }
 
-function Remove-FbClipboardHistoryItem {
-    param([Security.SecureString]$Key)
+function Remove-FbClipboardHistoryCandidates {
+    param([string[]]$Candidates)
+    if (-not $Candidates -or $Candidates.Count -eq 0) { return $false }
     if ($FB.TestSeam) {
         $history = Read-FbJsonSeam (Join-Path $FB.Session 'test-history.json')
         if ($null -eq $history) { return $false }
-        return $history.ContainsKey('delete_ok') -and [bool]$history['delete_ok']
+        return $history.ContainsKey('delete_ok') -and [bool]$history['delete_ok'] -and
+            (-not $history.ContainsKey('remaining_matches') -or [int]$history['remaining_matches'] -eq 0)
     }
     [void][Reflection.Assembly]::Load('System.Runtime.WindowsRuntime, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089')
     $clipboardType = [Windows.ApplicationModel.DataTransfer.Clipboard,Windows.ApplicationModel.DataTransfer,ContentType=WindowsRuntime]
@@ -274,26 +277,37 @@ function Remove-FbClipboardHistoryItem {
     $task.Wait()
     $history = $task.Result
     if ([int]$history.Status -ne 0) { return $false }
-    $bstr = [IntPtr]::Zero
-    $plain = $null
     try {
-        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Key)
-        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        $deleted = $false
         foreach ($item in @($history.Items)) {
             $textOperation = $item.Content.GetTextAsync()
             $textInterface = @($textOperation.GetType().GetInterfaces() | Where-Object { $_.Name -match '^IAsyncOperation' })[0]
             $textType = $textInterface.GenericTypeArguments[0]
             $textTask = $asTaskMethod.MakeGenericMethod($textType).Invoke($null, @($textOperation))
             $textTask.Wait()
-            if ([string]$textTask.Result -like ('*' + $plain + '*')) {
-                return [bool]$clipboardType::DeleteItemFromHistory($item)
+            $itemText = [string]$textTask.Result
+            $matches = $false
+            foreach ($candidate in $Candidates) { if ($itemText.Contains($candidate)) { $matches = $true; break } }
+            if ($matches) {
+                if (-not [bool]$clipboardType::DeleteItemFromHistory($item)) { return $false }
+                $deleted = $true
             }
         }
-    } finally {
-        $plain = $null
-        if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-    }
-    return $false
+        if (-not $deleted) { return $false }
+        $proofOperation = $clipboardType::GetHistoryItemsAsync()
+        $proofTask = $asTaskMethod.MakeGenericMethod($resultType).Invoke($null, @($proofOperation))
+        $proofTask.Wait()
+        if ([int]$proofTask.Result.Status -ne 0) { return $false }
+        foreach ($item in @($proofTask.Result.Items)) {
+            $textOperation = $item.Content.GetTextAsync()
+            $textInterface = @($textOperation.GetType().GetInterfaces() | Where-Object { $_.Name -match '^IAsyncOperation' })[0]
+            $textTask = $asTaskMethod.MakeGenericMethod($textInterface.GenericTypeArguments[0]).Invoke($null, @($textOperation))
+            $textTask.Wait()
+            $itemText = [string]$textTask.Result
+            foreach ($candidate in $Candidates) { if ($itemText.Contains($candidate)) { return $false } }
+        }
+        return $true
+    } catch { return $false }
 }
 
 function Save-FbKey {
@@ -376,6 +390,7 @@ function Invoke-FbW3 {
         $badKeys = 0
         $started = [DateTime]::UtcNow
         $nudged = $false
+        $observedCandidates = @()
         while ($true) {
             if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             $elapsed = ([DateTime]::UtcNow - $started).TotalSeconds
@@ -391,13 +406,21 @@ function Invoke-FbW3 {
             }
             $text = Get-FbClipboardText
             $candidates = @(Find-FbClipboardCandidates $text)
+            foreach ($candidate in $candidates) {
+                if ($observedCandidates -cnotcontains $candidate) { $observedCandidates += $candidate }
+            }
             if ($candidates.Count -gt 1) {
+                Clear-FbClipboard
                 Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'two-candidates'
                 Show-FbLine -Key 'W3-TWO'
                 Start-Sleep -Milliseconds 500
                 continue
             }
-            if ($candidates.Count -ne 1) { Start-Sleep -Milliseconds 500; continue }
+            if ($candidates.Count -ne 1) {
+                if ($text) { Clear-FbClipboard }
+                Start-Sleep -Milliseconds 500
+                continue
+            }
             $script:FbKey = ConvertTo-SecureString $candidates[0] -AsPlainText -Force
             $candidates = @()
             $text = $null
@@ -405,13 +428,13 @@ function Invoke-FbW3 {
             Clear-FbClipboard
             Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'got-it'
             if ($FB.HistoryOn) {
-                if (Remove-FbClipboardHistoryItem -Key $script:FbKey) {
+                if (Remove-FbClipboardHistoryCandidates -Candidates $observedCandidates) {
                     Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'history-deleted'
                 } else {
                     Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'history-delete-failed'
-                    $historyChoice = Wait-FbDecision -Step 'W3' -Reason 'key-history' -Words @('continue','finish-later')
-                    if ($historyChoice -ceq 'key-visible') { return Stop-FbVisibleKey }
-                    if ($historyChoice -ceq 'finish-later') { Remove-FbHeldKey; Show-FbLine -Key 'W3-LATER'; return 'finish-later' }
+                    Remove-FbHeldKey
+                    Show-FbLine -Key 'W3-LATER'
+                    return 'finish-later'
                 }
             }
             Show-FbLine -Key 'W3-GOT'
@@ -461,7 +484,11 @@ function Invoke-FbW4 {
             $loadChoice = Wait-FbDecision -Step 'W4' -Reason 'load-running' -Words @('wait','finish-later')
             if ($loadChoice -ceq 'key-visible') { return Stop-FbVisibleKey }
             if ($loadChoice -cne 'wait') { Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'; Show-FbLine -Key 'W4-LATER'; return 'finish-later' }
-            Start-Sleep -Seconds (Get-FbScaledSeconds 480)
+            $waitUntil = [DateTime]::UtcNow.AddSeconds((Get-FbScaledSeconds 480))
+            while ([DateTime]::UtcNow -lt $waitUntil) {
+                Start-Sleep -Seconds ([Math]::Min((Get-FbScaledSeconds 120), [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
+                Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'heartbeat'
+            }
             $processes = Test-FbProcesses
             if ($processes.Load) { Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'; Show-FbLine -Key 'W4-LATER'; return 'finish-later' }
         }
@@ -488,7 +515,11 @@ function Invoke-FbW4 {
         if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
         if ($choice -cne 'wait') { Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'; Show-FbLine -Key 'W4-LATER'; return 'finish-later' }
         $minutes = [Math]::Max($projection, 8)
-        Start-Sleep -Seconds (Get-FbScaledSeconds ($minutes * 60))
+        $waitUntil = [DateTime]::UtcNow.AddSeconds((Get-FbScaledSeconds ($minutes * 60)))
+        while ([DateTime]::UtcNow -lt $waitUntil) {
+            Start-Sleep -Seconds ([Math]::Min((Get-FbScaledSeconds 120), [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
+            Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'heartbeat'
+        }
         Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'wait-elapsed'
         if ($FB.DomainPresent) { $second = Invoke-FbHealthRead }
         else { $second = Invoke-FbHealthRead -WithKey }

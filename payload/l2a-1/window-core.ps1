@@ -24,6 +24,8 @@ $script:FB = @{
     Rejoin = $false
     RejoinRunId = $null
     PausedChoice = $null
+    PausedDecisionId = $null
+    LastDecisionId = $null
     HistoryOn = $false
     CloudClipboardOn = $false
     W7RunId = $null
@@ -97,7 +99,7 @@ function Show-FbLine {
         'W1-UPDATE-NOT-TODAY' = 'Update: not today. Your Brain keeps working as it is.'
         'W1-CHECK' = 'This computer needs a quick check first. Nothing was changed.'
         'W3-PAUSE' = 'Please pause your screen share for a minute; your password manager will be on screen.'
-        'W3-COPY' = 'Open your password manager, find Financial Brain updates, and click Copy. I''ll say Got it.'
+        'W3-COPY' = 'Open your password manager and copy your Financial Brain updates key.'
         'W3-NUDGE' = 'Still waiting for the key. Click Copy on Financial Brain updates in your password manager.'
         'W3-TWO' = 'That copy held more than one key-like value. Copy only the key, please.'
         'W3-GOT' = 'Got it.'
@@ -234,6 +236,7 @@ function Wait-FbStep {
     $events = @()
     $seen = 0
     $started = [DateTime]::UtcNow
+    $lastHeartbeat = $started
     while ($true) {
         if (Test-FbKeyVisible) { return @{ Exit = 1; Class = 'key-visible'; Events = $events } }
         if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
@@ -261,8 +264,30 @@ function Wait-FbStep {
         if ($TimeoutSec -gt 0 -and (([DateTime]::UtcNow - $started).TotalSeconds -ge $TimeoutSec)) {
             return @{ Exit = 1; Class = 'timeout'; Events = $events }
         }
+        if (([DateTime]::UtcNow - $lastHeartbeat).TotalSeconds -ge (Get-FbScaledSeconds 120)) {
+            Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'heartbeat'
+            $lastHeartbeat = [DateTime]::UtcNow
+        }
         Start-Sleep -Seconds 2
     }
+}
+
+function Stop-FbStep {
+    param([Parameter(Mandatory=$true)][string]$RunId)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FB.Node
+    $psi.Arguments = ((@((Join-Path $FB.Session 'fb-run.mjs'), 'cancel', '--session', $FB.Session, '--run', $RunId) | ForEach-Object { Quote-FbArgument $_ }) -join ' ')
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    [void]$process.Start()
+    $line = $process.StandardOutput.ReadLine()
+    $errorText = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    return $process.ExitCode -eq 0 -and $line -ceq ('CANCELLED ' + $RunId)
 }
 
 function New-FbDecisionId {
@@ -300,6 +325,7 @@ function Wait-FbDecision {
     Write-FbStatus -Step $Step -Code 'WAITING' -Who 'lead' -Reason $Reason -Id $id -Words $Words
     $decisionPath = Join-Path $FB.Run 'decision.txt'
     $started = [DateTime]::UtcNow
+    $lastHeartbeat = $started
     $limit = if ($DefaultAfterSec -gt 0) { Get-FbScaledSeconds $DefaultAfterSec } else { 0 }
     while ($true) {
         if (Test-Path -LiteralPath $decisionPath -PathType Leaf) {
@@ -308,12 +334,16 @@ function Wait-FbDecision {
             if ($line -match '^(\S+)\s+id=([0-9a-f]{6})$') {
                 $word = $Matches[1]
                 $foundId = $Matches[2]
-                if ($foundId -ceq $id -and $Words -ccontains $word) { return $word }
+                if ($foundId -ceq $id -and $Words -ccontains $word) { $FB.LastDecisionId = $id; return $word }
                 Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'decision-ignored'
                 Remove-Item -LiteralPath $decisionPath -Force -ErrorAction SilentlyContinue
             }
         }
         if ($limit -gt 0 -and (([DateTime]::UtcNow - $started).TotalSeconds -ge $limit)) { return $Default }
+        if (([DateTime]::UtcNow - $lastHeartbeat).TotalSeconds -ge (Get-FbScaledSeconds 120)) {
+            Write-FbStatus -Step $Step -Code 'INFO' -Reason 'heartbeat'
+            $lastHeartbeat = [DateTime]::UtcNow
+        }
         Start-Sleep -Milliseconds 250
     }
 }
@@ -399,7 +429,7 @@ function Remove-FbHeldKey {
 }
 
 function Stop-FbUnexpected {
-    Write-FbStatus -Step 'RUN' -Code 'STOP' -Reason 'lead-stop'
+    Write-FbStatus -Step 'RUN' -Code 'STOP' -Who 'lead-stop' -Reason 'unexpected-error'
     Show-FbLine -Key 'LEAD'
 }
 

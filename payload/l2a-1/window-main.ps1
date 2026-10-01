@@ -1,6 +1,9 @@
 function Invoke-FbWindowMain {
     try {
         Initialize-FbCore
+        if ($FB.TestSeam -and (Test-Path -LiteralPath (Join-Path $FB.Session 'test-force-unexpected.marker') -PathType Leaf)) {
+            throw 'forced unexpected test seam'
+        }
         Write-FbStatus -Step 'RUN' -Code 'START' -Reason 'start'
         if (-not $FB.Tier2On) {
             Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'tier2-off'
@@ -30,7 +33,7 @@ function Invoke-FbWindowMain {
             return
         }
         if ($FB.PausedChoice -ceq 'deploy-recover') {
-            $recoverRun = Start-FbStep -Step 'deploy-recover' -WithKey
+            $recoverRun = Start-FbStep -Step 'deploy-recover' -WithKey -DecisionId $FB.PausedDecisionId
             if ($recoverRun) {
                 $recover = Wait-FbStep -RunId $recoverRun -TimeoutSec 960
                 if ($recover.Exit -ne 0) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed' }

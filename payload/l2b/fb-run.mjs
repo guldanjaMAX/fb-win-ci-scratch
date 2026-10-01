@@ -456,6 +456,16 @@ function preflightUpdate(plan) {
   return { refusal: null, childStart };
 }
 
+function preflightKitInstall(plan) {
+  const processes = getProcesses(plan);
+  const excluded = descendantsOfSelf(processes);
+  for (const item of processes) {
+    if (excluded.has(Number(item.pid))) continue;
+    if (/brain\.mjs"?\s+(load|ingest)(?:\s|$)/iu.test(String(item.commandLine || ""))) return "load-running";
+  }
+  return null;
+}
+
 function removeOwnLock(plan) {
   const path = join(plan.runRoot, "update.lock");
   const lock = parseLock(path);
@@ -684,6 +694,18 @@ async function childCommand(runid) {
       process.exit(3);
     }
   }
+  if (plan.step === "kit-install") {
+    let refusal;
+    try {
+      refusal = preflightKitInstall(plan);
+    } catch {
+      refusal = "spawn";
+    }
+    if (refusal) {
+      atomicWrite(join(plan.folder, "refusal.txt"), `${refusal}\n`);
+      process.exit(3);
+    }
+  }
 
   atomicWrite(join(plan.folder, "meta.txt"), [
     `step=${plan.step}`,
@@ -725,8 +747,17 @@ async function childCommand(runid) {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       env: stepEnv,
-      detached: process.platform !== "win32",
+      detached: false,
     });
+    atomicWrite(join(plan.folder, "meta.txt"), [
+      `step=${plan.step}`,
+      `attempt=${plan.attempt}`,
+      `started=${plan.started}`,
+      `child_pid=${process.pid}`,
+      `child_start=${childStart}`,
+      `step_pid=${child.pid}`,
+      "",
+    ].join("\n"));
   } catch {
     child = null;
   }
@@ -801,6 +832,60 @@ function probeCommand(argv) {
   console.log(Number.isFinite(age) && age <= staleMs ? "RUNNING" : "DEAD");
 }
 
+function parseRunTarget(argv) {
+  if (argv.length !== 4 || argv[0] !== "--session" || argv[2] !== "--run") refuse("bad-args");
+  const session = resolve(argv[1]);
+  const runid = argv[3];
+  if (!isAbsolute(session) || !RUN_ID_RE.test(runid)) refuse("bad-args");
+  return { session, runid, folder: join(session, "run", "steps", runid) };
+}
+
+async function cancelCommand(argv) {
+  let target;
+  try {
+    target = parseRunTarget(argv);
+  } catch (error) {
+    console.log(`REFUSED ${error.refusal || "bad-args"}`);
+    process.exitCode = 3;
+    return;
+  }
+  const exitPath = join(target.folder, "exit.txt");
+  if (existsSync(exitPath)) {
+    console.log(`CANCELLED ${target.runid}`);
+    return;
+  }
+  const metaPath = join(target.folder, "meta.txt");
+  if (!existsSync(metaPath)) {
+    console.log("REFUSED not-running");
+    process.exitCode = 3;
+    return;
+  }
+  const meta = parseLock(metaPath);
+  const pids = [Number(meta?.child_pid), Number(meta?.step_pid)].filter((pid) => Number.isSafeInteger(pid) && pid >= 2);
+  if (!pids.length) {
+    console.log("REFUSED not-running");
+    process.exitCode = 3;
+    return;
+  }
+  for (const pid of [...pids].reverse()) killTree({ pid });
+  const deadline = Date.now() + 30_000;
+  let exited = false;
+  while (Date.now() < deadline) {
+    const alive = pids.some((pid) => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    });
+    if (!alive) { exited = true; break; }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  if (!exited && process.platform !== "win32") {
+    console.log("REFUSED still-running");
+    process.exitCode = 3;
+    return;
+  }
+  if (!existsSync(exitPath)) atomicWrite(exitPath, `EXIT 1 cancelled ${utc()}\n`);
+  console.log(`CANCELLED ${target.runid}`);
+}
+
 export function registrySnapshotForTest({ session }) {
   const inputs = sessionInputs(resolve(session));
   const desktop = readDesktop(inputs, true);
@@ -829,6 +914,7 @@ if (isMain) {
   if (command === "start") await startCommand(args);
   else if (command === "__child" && args.length === 1) await childCommand(args[0]);
   else if (command === "probe") probeCommand(args);
+  else if (command === "cancel") await cancelCommand(args);
   else {
     console.log("REFUSED bad-args");
     process.exitCode = 3;

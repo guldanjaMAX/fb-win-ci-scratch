@@ -56,7 +56,7 @@ const DECISION_WORDS = new Set([
 ]);
 const FALLBACK_CHOICES = new Map([
   ["W1 brain-paused", ["continue", "deploy-recover", "finish-later"]],
-  ["W3 key-history", ["continue", "finish-later"]],
+  ["W3 key-history", ["finish-later"]],
   ["W3 verify-network", ["retry", "finish-later"]],
   ["W4 queue", ["wait", "finish-later"]],
   ["W4 load-running", ["wait", "finish-later"]],
@@ -65,7 +65,7 @@ const FALLBACK_CHOICES = new Map([
   ["W7 update-retry", ["continue", "stop"]],
   ["W7 update-queued", ["deploy-recover", "finish-later"]],
   ["W8 google-partial", ["restore", "keep", "retry"]],
-  ["W8 google-account", ["restore", "keep", "retry"]],
+  ["W8 google-account", ["restore", "retry"]],
 ]);
 
 export const STUB_TEMPLATE = String.raw`$ErrorActionPreference = 'Stop'
@@ -139,17 +139,24 @@ function validPin(pin) {
     /^[a-f0-9]{64}$/u.test(pin.sha256);
 }
 
-function tokenLike(text) {
-  for (const match of text.matchAll(/[A-Za-z0-9_-]{35,}/gu)) {
-    const value = match[0];
-    if (/[A-Z]/u.test(value) && /[a-z]/u.test(value) && /[0-9]/u.test(value)) return true;
-  }
-  return false;
+function keyLengthsFromFacts(bytes, fallback = [40]) {
+  try {
+    const values = JSON.parse(Buffer.from(bytes).toString("utf8")).key_lengths;
+    if (Array.isArray(values) && values.length && values.every((value) => Number.isSafeInteger(value) && value > 0 && value <= 256)) {
+      return [...new Set(values)];
+    }
+  } catch {}
+  return fallback;
 }
 
-export function isUnsafeText(text) {
+function tokenLike(text, acceptedLengths) {
+  const lengths = new Set(acceptedLengths);
+  return [...String(text).matchAll(/[A-Za-z0-9_-]+/gu)].some((match) => lengths.has(match[0].length));
+}
+
+export function isUnsafeText(text, acceptedLengths = [40]) {
   const value = String(text);
-  if (tokenLike(value)) return true;
+  if (tokenLike(value, acceptedLengths)) return true;
   if (/[a-fA-F0-9]{24,}/u.test(value)) return true;
   if (/\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b/u.test(value)) return true;
   if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu.test(value)) return true;
@@ -354,6 +361,7 @@ export async function createHelper(options = {}) {
   const logonType = options.logonType ?? "Interactive";
   const queryProcess = options.queryProcess ?? ((value) => defaultProcessQuery({ ...value, spawn, env }));
   const output = options.output ?? ((line) => process.stdout.write(`${line}\n`));
+  let keyLengths = keyLengthsFromFacts(await readMaybe(join(sessionDir, FACTS_NAME)));
 
   await mkdir(runDir, { recursive: true });
 
@@ -366,7 +374,7 @@ export async function createHelper(options = {}) {
 
   async function guardedPage(kind, line) {
     let shown = line;
-    if (isUnsafeText(line)) {
+    if (isUnsafeText(line, keyLengths)) {
       shown = kind === "start" ? PAGE_SENTENCES.mismatch : PAGE_SENTENCES.working;
       await appendHelper("hidden", "1");
     }
@@ -384,7 +392,7 @@ export async function createHelper(options = {}) {
       cut = true;
     }
     if (cut) await appendHelper("now_cut", "yes");
-    if (!line || isUnsafeText(line)) return { line: fallback, hidden: 1 };
+    if (!line || isUnsafeText(line, keyLengths)) return { line: fallback, hidden: 1 };
     return { line, hidden: 0 };
   }
 
@@ -471,6 +479,7 @@ export async function createHelper(options = {}) {
     } catch {
       return finishStart("stop-fingerprint-facts", PAGE_SENTENCES.mismatch);
     }
+    keyLengths = keyLengthsFromFacts(factsResult.bytes);
     if (Object.hasOwn(facts, "marker") && facts.marker !== MARKER_NAME) {
       return finishStart("stop-marker-mismatch", PAGE_SENTENCES.mismatch);
     }

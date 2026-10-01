@@ -48,22 +48,13 @@ export const armSpecs = [
   { id: "A15-partial", negative: true, point: "granted scope set compared", statuses: ["W8 INFO check-start", "W8 INFO reconnect-needed", "W8 WAITING owner google-consent", "W8 INFO connected", "W8 INFO scope-missing-calendar", "W8 INFO account-unknown", "W8 WAITING lead google-partial id=<id> words=restore,keep,retry", "W8 INFO kept"], calls: { "google-scopes": 2, "google-connect": 1 } },
   { id: "A15-full", negative: false, point: "full granted scope set compared", statuses: ["W8 INFO check-start", "W8 INFO reconnect-needed", "W8 WAITING owner google-consent", "W8 INFO connected", "W8 INFO account-same", "W8 PASS scopes-all"], calls: { "google-scopes": 2, "google-connect": 1 } },
   { id: "A16", negative: true, point: "kit byte hash compared", statuses: ["W6 STOP kit sha"], calls: { "npm-cli.js": 0 } },
-  { id: "A17", negative: true, point: "key-visible decision consumed", statuses: ["W3 STOP key key-visible"], calls: { verify: 0 }, meta: { keyFile: false, cloudCallsAfter: 0 } }
+  { id: "A17", negative: true, point: "key-visible decision consumed", statuses: ["W3 STOP key key-visible"], calls: { verify: 0 }, meta: { keyFile: false, cloudCallsAfter: 0 } },
+  { id: "PR002", negative: true, point: "timed-out connect child stopped before backup restore", statuses: ["W8 WAITING owner google-consent", "W8 INFO restored", "W11 DONE done"], calls: { "google-connect": 1, "google-restore": 1, "google-discard": 0 }, meta: { lateSuccess: true, childStopped: true } },
+  { id: "PR003", negative: true, point: "all observed clipboard candidates cleared and history absence proved", statuses: ["W3 INFO two-candidates", "W3 INFO history-deleted", "W3 PASS key-saved"], calls: { verify: 1 }, meta: { remainingHistoryMatches: 0 } },
+  { id: "PR004", negative: true, point: "cross-class update retry ceiling reached", statuses: ["W7 INFO retry-cpu-reset", "W7 STOP update second-failure"], calls: { update: 2 }, meta: { totalAttempts: 2 } },
+  { id: "PR005", negative: true, point: "load rechecked immediately before kit install", statuses: ["W6 SKIP load-running", "W11 DONE done"], calls: { "npm-cli.js": 0 }, meta: { processScanReached: true } },
+  { id: "PR006", negative: true, point: "startup-paused decision id reached deploy supervisor", statuses: ["W1 WAITING lead brain-paused id=<id> words=continue,deploy-recover,finish-later", "W3 PASS key-saved", "W11 DONE done"], calls: { deploy: 1 }, meta: { decisionIdForwarded: true } },
+  { id: "PR008", negative: true, point: "unexpected exception became newest parseable STOP", statuses: ["RUN STOP lead-stop unexpected-error"], calls: {}, meta: { helperBoundary: "RUN.STOP.lead-stop-unexpected-error" } }
 ];
 
 export const armMap = new Map(armSpecs.map((arm) => [arm.id, arm]));
-
-export const mutantExpectations = {
-  O1: ["A6", "A6-hidden"],
-  O2: ["A7"],
-  O3: ["A0", "A13"],
-  O4: ["A2"],
-  O5: ["A11", "A11-empty", "A11-probe"],
-  O11: ["A11b"],
-  O12: ["A10-nodigit"],
-  O6: ["A1", "A1-wait"],
-  O7: ["A15-403"],
-  O8: ["A9-write"],
-  O9: ["A4", "A4-later"],
-  O10: ["A14"]
-};

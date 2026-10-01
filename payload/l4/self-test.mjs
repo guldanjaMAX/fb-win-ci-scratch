@@ -1,13 +1,16 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { checkLegacy } from "./check-phrases.mjs";
 import { checkMerged } from "./check-phrases-ci.mjs";
 import { freshKey, installStub, makeFakeNode, makeLargeDriveState, makeSession, scenarioFor } from "./fixtures.mjs";
-import { armSpecs, mutantExpectations } from "./reference/arms.mjs";
+import { armSpecs } from "./reference/arms.mjs";
 import { canonical, detectSuspect, simulateArm, verifyArm } from "./reference/oracle.mjs";
 import { expectedRunnerNames, verifyRunnerArtifacts } from "./artifact-pins.mjs";
+import { validateRealSessionEvidence } from "./real-session-evidence.mjs";
+import { applyProductionMutant, productionMutants } from "./production-mutants.mjs";
 
 let failures = 0;
 function check(condition, label) {
@@ -19,11 +22,6 @@ const oracle = armSpecs.map((arm) => simulateArm(arm.id));
 const oracleChecks = oracle.map(verifyArm);
 check(oracleChecks.every((item) => item.pass), `oracle ${oracleChecks.filter((item) => item.pass).length}/${oracleChecks.length} arms`);
 check(!detectSuspect(oracle).suspect, "oracle sequences are non-uniform");
-
-for (const [mutant, expectedFailures] of Object.entries(mutantExpectations)) {
-  const actualFailures = armSpecs.filter((arm) => !verifyArm(simulateArm(arm.id, mutant)).pass).map((arm) => arm.id);
-  check(JSON.stringify(actualFailures) === JSON.stringify(expectedFailures), `${mutant} caught by ${expectedFailures.join(",")}`);
-}
 
 const nullResults = armSpecs.map((arm) => ({
   arm: arm.id,
@@ -45,6 +43,34 @@ const alwaysDone = armSpecs.map((arm) => {
 const alwaysDonePasses = alwaysDone.filter((result) => verifyArm(result).pass).map((result) => result.arm);
 check(JSON.stringify(alwaysDonePasses) === JSON.stringify(["A0"]), "always-done oracle passes only A0");
 check(!detectSuspect(alwaysDone).suspect, "always-done oracle does not trip uniform detector");
+
+const missingSessionEvidence = simulateArm("A0");
+missingSessionEvidence.target = "windows";
+missingSessionEvidence.meta = { sessionEvidence: false, actualStatusCount: 0 };
+missingSessionEvidence.decision_point = { ...missingSessionEvidence.decision_point, source: "oracle" };
+const refusedSyntheticWindows = validateRealSessionEvidence(missingSessionEvidence);
+check(!refusedSyntheticWindows.pass && refusedSyntheticWindows.errors.includes("decision-not-session") && refusedSyntheticWindows.errors.includes("window-not-launched"), "windows PASS refuses oracle or stub evidence without a real launched session");
+
+const realSessionShape = {
+  ...simulateArm("A0"),
+  target: "windows",
+  decision_point: { required: "control", reached: true, source: "session" },
+  meta: { sessionEvidence: true, actualStatusCount: 1, sessionRunnerExit: 0, bridge: { pass: true, launched: true } }
+};
+check(validateRealSessionEvidence(realSessionShape).pass, "windows evidence guard accepts the complete real-session shape");
+
+for (const [id, mutant] of Object.entries(productionMutants)) {
+  const source = `before\n${mutant.find}\nafter\n`;
+  const changed = applyProductionMutant(source, id);
+  check(changed !== source && changed.includes(mutant.replace), `${id} mutates copied production ${mutant.file}`);
+}
+
+const windowsSessionSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "windows-session.mjs"), "utf8");
+const armRunnerSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "run-arms.mjs"), "utf8");
+const windowsFunctionSource = armRunnerSource.slice(armRunnerSource.indexOf("function runWindowsArm"), armRunnerSource.indexOf("const args ="));
+check(!windowsSessionSource.includes("simulateArm(") && !windowsSessionSource.includes("runStubArm("), "Windows session builder never sources evidence from oracle or stub targets");
+check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.includes("runStubArm("), "Windows arm path launches the per-arm session runner");
+check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
 
 const scratch = mkdtempSync(join(tmpdir(), "phrase-self-test-"));
 check(expectedRunnerNames().length === 9, "runner bridge pins helper plus eight served files");
@@ -109,5 +135,5 @@ const driveCount = Object.keys(driveState.done).length + Object.keys(driveState.
 check(large.bytes >= 50 * 1024 * 1024 && driveCount === 3 && driveMs < 5000, `fifty-megabyte drive read ${driveMs.toFixed(1)}ms bound=5000ms counts=3`);
 
 const sequenceCount = new Set(oracle.map((result) => JSON.stringify(result.status_lines.map(canonical)))).size;
-console.log(`SUMMARY arms=${armSpecs.length} mutants=${Object.keys(mutantExpectations).length} sequences=${sequenceCount} failures=${failures}`);
+console.log(`SUMMARY arms=${armSpecs.length} sequences=${sequenceCount} failures=${failures}`);
 process.exitCode = failures ? 1 : 0;

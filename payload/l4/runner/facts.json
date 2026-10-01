@@ -11,7 +11,8 @@
   "history_delete_proven": false,
   "cloud_clipboard_allowed": false,
   "key_lengths": [
-    40
+    40,
+    53
   ],
   "drain_per_minute": 60,
   "marker": "REHEARSAL.marker",

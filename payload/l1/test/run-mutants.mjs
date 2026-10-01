@@ -18,7 +18,7 @@ const arms = [
   ["M1", "test 7", "if (!choices.includes(word)) {", "if (false && !choices.includes(word)) {"],
   ["M2", "test 5", "if (BOUNDARY_CODES.has(event.code)) {", "if (event.code === \"INFO\" || BOUNDARY_CODES.has(event.code)) {"],
   ["M3", "test 6", "  async function status() {\n", "  async function status() {\n    await sleep(2000);\n"],
-  ["M4", "test 8", "export function isUnsafeText(text) {\n", "export function isUnsafeText(text) {\n  return false;\n"],
+  ["M4", "test 8", "export function isUnsafeText(text, acceptedLengths = [40]) {\n", "export function isUnsafeText(text, acceptedLengths = [40]) {\n  return false;\n"],
   ["M5", "test 1", "const enabled = facts.tier2 === \"on\" || facts.w8 === \"on\" || markerOn;", "const enabled = true;"],
   ["M6", "test 3", "if (await fullAlive()) return finishStart(\"already-open\", PAGE_SENTENCES.open);", "if (false && await fullAlive()) return finishStart(\"already-open\", PAGE_SENTENCES.open);"],
   ["M7", "test 2", "const matches = bytes.length === pin.bytes && sha256(bytes) === pin.sha256;", "const matches = true;"],

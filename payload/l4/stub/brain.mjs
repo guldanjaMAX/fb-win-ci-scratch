@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,12 +7,14 @@ const packageDir = dirname(fileURLToPath(import.meta.url));
 const prefix = resolve(packageDir, "..", "..");
 const scenarioPath = resolve(prefix, "scenario.json");
 const callsPath = resolve(prefix, "stub-calls.jsonl");
+const controlsPath = resolve(prefix, "fixture-controls.jsonl");
 const phrasePath = resolve(prefix, "phrases.json");
 const scenario = JSON.parse(readFileSync(scenarioPath, "utf8"));
 const table = JSON.parse(readFileSync(phrasePath, "utf8"));
 const entries = new Map(table.entries.map((entry) => [entry.id, entry]));
 const argv = process.argv.slice(2);
-const command = argv[0] === "--version" ? "version" : argv[0] || "none";
+const fixtureStep = argv[0] === "--fixture-step";
+const command = fixtureStep ? "fixture-step" : argv[0] === "--version" ? "version" : argv[0] || "none";
 
 function hash(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -52,9 +54,19 @@ async function stdinState(readIt) {
   return { eof: true, bytes };
 }
 
+function allPriorCalls() {
+  try {
+    return readFileSync(callsPath, "utf8").trim().split(/\r?\n/u).filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
+
 const scripts = scenario.commands?.[command] || [];
-const index = priorCalls();
-const action = scripts[Math.min(index, Math.max(0, scripts.length - 1))] || {};
+const index = fixtureStep ? allPriorCalls() : priorCalls();
+const action = fixtureStep
+  ? scenario.sequence?.[Math.min(index, Math.max(0, (scenario.sequence?.length || 1) - 1))] || {}
+  : scripts[Math.min(index, Math.max(0, scripts.length - 1))] || {};
 
 if (command === "version") {
   process.stdout.write(`${scenario.version || "0.4.9"}\n`);
@@ -66,15 +78,18 @@ for (const line of action.lines || []) {
   process.stdout.write(`${marked(line.kind || entry.kind, materialize(entry, line.inserts || []))}\n`);
 }
 
+for (const line of action.raw || []) process.stdout.write(`${line}\n`);
+
 if (Array.isArray(action.leakParts)) {
   process.stdout.write(`${action.leakParts.join("")}\n`);
 }
+if (action.leak_classes) appendFileSync(controlsPath, `${JSON.stringify({ raw_hits: action.leak_classes })}\n`, "utf8");
 
 const input = await stdinState(action.readStdin === true);
 const names = Object.keys(process.env).filter((name) => name.startsWith("CLOUDFLARE_") || name.startsWith("BRAIN_")).sort();
 const key = process.env.CLOUDFLARE_API_TOKEN || "";
 const call = {
-  command,
+  command: action.label || command,
   argv,
   cwd: process.cwd(),
   stdin_tty: process.stdin.isTTY === true,
@@ -84,4 +99,6 @@ const call = {
   key_matches: Boolean(scenario.right_key_sha256) && hash(key) === scenario.right_key_sha256
 };
 appendFileSync(callsPath, `${JSON.stringify(call)}\n`, { encoding: "utf8" });
+if (action.processes) writeFileSync(scenario.processes_path, `${JSON.stringify(action.processes)}\n`, "utf8");
+if (Number(action.delay_ms) > 0) await new Promise((resolveWait) => setTimeout(resolveWait, Number(action.delay_ms)));
 process.exitCode = Number.isInteger(action.exit) ? action.exit : 0;

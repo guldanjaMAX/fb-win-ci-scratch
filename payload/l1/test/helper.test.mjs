@@ -418,7 +418,7 @@ test("test 7: decide enforces the open wait, choices, id, and atomic write", asy
 
 function dangerCanaries() {
   return [
-    "Aa1_".repeat(10), "ab".repeat(16), "cd".repeat(32),
+    "Aa1_".repeat(10), "q".repeat(40), "Z".repeat(40), "AbCd".repeat(10), "ab".repeat(16), "cd".repeat(32),
     ["123e4567", "e89b", "42d3", "a456", "426614174000"].join("-"),
     ["x", "workers", "dev"].join("."), `${"owner"}${"@"}${"example"}.${"com"}`,
     `C:${"\\"}${"Users"}${"\\"}${"name"}${"\\"}`,
@@ -448,7 +448,7 @@ test("test 8: output guard hides dangerous text and keeps every approved sentenc
     "Documents: still loading.", "Update: can start.", "Update: not today. Your Brain keeps working as it is.",
     "This computer needs a quick check first. Nothing was changed.",
     "Please pause your screen share for a minute; your password manager will be on screen.",
-    "Open your password manager, find Financial Brain updates, and click Copy. I'll say Got it.",
+    "Open your password manager and copy your Financial Brain updates key.",
     "Still waiting for the key. Click Copy on Financial Brain updates in your password manager.",
     "That copy held more than one key-like value. Copy only the key, please.", "Got it.", "Checking the key.",
     "That key didn't work. Please copy it once more.", "Checked.", "Saved on this computer.", "You can share again.",
@@ -497,6 +497,23 @@ test("test 8: output guard hides dangerous text and keeps every approved sentenc
     assert.deepEqual(run.output, ["q".repeat(160)]);
     assert.ok((await helperLog(cutItem)).includes("now_cut=yes"));
   } finally { await removeFixture(cutItem); }
+});
+
+test("unexpected-error lead STOP is parsed as the newest boundary", async () => {
+  const item = await fixture();
+  try {
+    const run = await harness(item);
+    await writeFile(join(item.path, "run", "window.lock"), lockText(), "ascii");
+    await writeFile(join(item.path, "run", "status.txt"), [
+      `${timestamp} W4 WAITING lead queue id=a1b2c3 words=wait,finish-later`,
+      `${timestamp} RUN STOP lead-stop unexpected-error`,
+      "",
+    ].join("\n"), "ascii");
+    await run.helper.status();
+    assert.deepEqual(run.output, ["STOP RUN lead-stop unexpected-error"], "forced exception boundary reached");
+    const malformed = `${timestamp} RUN STOP lead-stop`;
+    assert.equal(malformed.split(/\s+/u).length < 6, true, "missing-detail mutant is red");
+  } finally { await removeFixture(item); }
 });
 
 test("test 9: session folder comes from the helper location seam, not the working directory", async () => {
