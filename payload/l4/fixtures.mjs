@@ -109,3 +109,40 @@ export function scenarioFor(linesByCommand, key) {
     commands: linesByCommand
   };
 }
+
+export function scenarioForSupervisorArgv(sequence, key, processesPath = null) {
+  const commandByLabel = new Map([
+    ["health", "health"],
+    ["health-key", "health"],
+    ["verify", "verify"],
+    ["update-preview", "update"],
+    ["update", "update"],
+    ["deploy", "deploy"],
+    ["google-calendar-check", "ingest"],
+    ["google-connect", "connect"]
+  ]);
+  const commands = {};
+  for (const action of sequence) {
+    const command = commandByLabel.get(action.label);
+    if (!command) continue;
+    commands[command] ||= [];
+    commands[command].push({ ...action, expect_output: true });
+  }
+  return {
+    version: "0.4.9",
+    right_key_sha256: createHash("sha256").update(key).digest("hex"),
+    processes_path: processesPath,
+    expected_output_commands: Object.keys(commands),
+    commands
+  };
+}
+
+export function scenarioForSessionHelpers(sequence) {
+  const commands = {};
+  for (const action of sequence) {
+    if (!action.label?.startsWith("google-") || ["google-calendar-check", "google-connect"].includes(action.label)) continue;
+    commands[action.label] ||= [];
+    commands[action.label].push({ ...action, expect_output: true });
+  }
+  return { expected_output_commands: Object.keys(commands), commands };
+}

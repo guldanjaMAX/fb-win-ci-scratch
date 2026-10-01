@@ -43,7 +43,7 @@ function runWindowsArm(arm, runnerDir, armOut) {
   result.meta = { ...result.meta, sessionRunnerExit: proc.status, hostLimit: result.host_limited ? result.host_limit_reason : null };
   const evidence = validateRealSessionEvidence(result);
   result.meta = { ...result.meta, realSessionEvidencePass: evidence.pass, realSessionEvidenceErrors: evidence.errors };
-  if (!evidence.pass) {
+  if (!evidence.pass && result.status !== "void") {
     result.status = "fail";
     result.errors = [...(result.errors || []), ...evidence.errors];
   }
@@ -66,16 +66,17 @@ for (const arm of arms) {
   const result = args.target === "oracle" ? simulateArm(arm) : args.target === "stub" ? runStubArm(arm) : runWindowsArm(arm, args.runnerDir, armOut);
   result.id = arm;
   const checked = verifyArm(result);
-  if (!result.host_limited) result.status = checked.pass && (args.target !== "windows" || result.meta.realSessionEvidencePass === true) ? "pass" : "fail";
+  if (result.meta.harnessVoid === true) result.status = "void";
+  else if (!result.host_limited) result.status = checked.pass && (args.target !== "windows" || result.meta.realSessionEvidencePass === true) ? "pass" : "fail";
   else result.status = result.meta.realSessionEvidencePass === true ? "skip" : "fail";
   result.errors = [...(result.meta.realSessionEvidenceErrors || []), ...checked.errors];
   writeFileSync(resolve(armOut, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   results.push(result);
   if (arm === "A0") controlPassed = result.status === "pass";
-  console.log(`${result.status === "pass" || result.status === "skip" ? result.status.toUpperCase() : "FAIL"} ${arm} point=${result.decision_point?.reached ? "reached" : "missed"}`);
+  console.log(`${["pass", "skip", "void"].includes(result.status) ? result.status.toUpperCase() : "FAIL"} ${arm} point=${result.decision_point?.reached ? "reached" : "missed"}`);
 }
 const suspect = detectSuspect(results);
 if (suspect.suspect) console.log(`HARNESS SUSPECT: uniform results (${suspect.reason})`);
-const summary = { target: args.target, arms: results.length, passed: results.filter((result) => result.status === "pass").length, host_limited: results.filter((result) => result.host_limited).length, suspect };
+const summary = { target: args.target, arms: results.length, passed: results.filter((result) => result.status === "pass").length, host_limited: results.filter((result) => result.host_limited).length, void: results.filter((result) => result.status === "void").length, suspect };
 writeFileSync(resolve(args.out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
 process.exitCode = results.every((result) => result.status === "pass" || (result.status === "skip" && result.host_limited)) && !suspect.suspect ? 0 : 1;

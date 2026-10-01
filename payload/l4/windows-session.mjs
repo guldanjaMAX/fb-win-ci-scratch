@@ -15,13 +15,19 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { armMap } from "./reference/arms.mjs";
 import { canonical } from "./reference/oracle.mjs";
-import { freshKey, installStub, makeFakeNode, makeSession, splitCanaries } from "./fixtures.mjs";
+import { freshKey, installStub, makeFakeNode, makeSession, scenarioForSessionHelpers, scenarioForSupervisorArgv, splitCanaries } from "./fixtures.mjs";
+import { silentExpectedStubCalls } from "./real-session-evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const served = [
   "fb-win.mjs", "finish-window.txt", "fb-run.mjs", "fb-drive-state.mjs",
   "fb-manifest-edit.mjs", "fb-kit.mjs", "fb-google.mjs", "phrases.json", "facts.json",
 ];
+const stubOutputSteps = new Set([
+  "cli-version", "health", "health-key", "verify", "update-preview", "update",
+  "deploy-recover", "google-lease", "google-scopes", "google-backup", "google-restore",
+  "google-discard", "google-calendar-check", "google-connect",
+]);
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -155,11 +161,11 @@ function planFor(id, processesPath) {
   if (id === "A10-control") return { ...plan, repeatClipboard: true, sequence: [nodeVersion(), version(), drive(), ready(), keyBad(), keyOk(), edit(), fetchOk(), installOk(), version(), previewOk(), updateVerified(), edit(), ready(), version()] };
   if (id === "A10-short") return { ...plan, shortClipboard: true, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
   if (id === "A17") return { ...plan, keyVisible: true, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
-  if (id === "A12-review") return { ...plan, sequence: [nodeVersion(), version(), drive({ drive_state: "pending", terminal: "no", review: "yes" }), ready(), keyOk(), edit(), ready(), version()] };
+  if (id === "A12-review") return { ...plan, driveReview: true, sequence: [nodeVersion(), version(), drive({ drive_state: "pending", terminal: "no", review: "yes" }), ready(), keyOk(), edit(), ready(), version()] };
   if (id === "A13") return { ...plan, sequence: [...commonPrefix(), ...preUpdate(), updatePendingMigration(), ready(), version()] };
   if (id === "A16") return { ...plan, sequence: commonPrefix().concat([edit(), facts("kit-fetch", { reason: "sha" }, { exit: 1 }), ready(), version()]) };
   if (id === "PR004") return { ...plan, decisions: { "W7 update-retry": "continue" }, sequence: [...commonPrefix(), ...preUpdate(), updateCpu(), update503(), updateNetwork(), updateVerified(), ready(), version()] };
-  if (id === "PR005") return { ...plan, sequence: commonPrefix().concat([edit(), fetchOk({ processes: [{ CommandLine: 'node brain.mjs load fixture', ProcessId: 8001, commandLine: 'node brain.mjs load fixture', pid: 8001, parentPid: 0, start: 'fixture-load' }] }), ready(), version()]) };
+  if (id === "PR005") return { ...plan, loadBeforeInstall: true, sequence: commonPrefix().concat([edit(), fetchOk(), ready(), version()]) };
   return { ...plan, sequence: commonPrefix().concat(successTail()) };
 }
 
@@ -208,6 +214,21 @@ function stepMetaCalls(session) {
     if (step) calls.push({ command: step === "deploy-recover" ? "deploy" : step, key_matches: ["update", "deploy-recover", "verify", "health-key"].includes(step), source: "step-meta" });
   }
   return calls;
+}
+
+function emptyExpectedStubSteps(session) {
+  const root = join(session, "run", "steps");
+  if (!existsSync(root)) return [];
+  const empty = [];
+  for (const folder of readdirSync(root)) {
+    const metaPath = join(root, folder, "meta.txt");
+    if (!existsSync(metaPath)) continue;
+    const step = /^step=(.+)$/mu.exec(readFileSync(metaPath, "utf8"))?.[1];
+    if (!stubOutputSteps.has(step)) continue;
+    const outPath = join(root, folder, "out.log");
+    if (!existsSync(outPath) || statSync(outPath).size === 0) empty.push(step);
+  }
+  return empty;
 }
 
 function projectStatus(actual, expected) {
@@ -277,16 +298,22 @@ function helperDecision(session, word) {
   return run.status === 0;
 }
 
-async function driveWindow({ child, session, plan, key }) {
+async function driveWindow({ child, session, plan, key, desktop }) {
   const statusPath = join(session, "run", "status.txt");
   const decided = new Set();
   let clipboardAdvanced = false;
+  let loadInjected = false;
+  let desktopInjected = false;
   let badKeyCount = 0;
   const deadline = Date.now() + 120_000;
   const closed = new Promise((resolveClose) => child.once("close", resolveClose));
   while (child.exitCode === null && Date.now() < deadline) {
     const status = lines(statusPath);
     for (const line of status) {
+      if (!desktopInjected && / W1 INFO memory-ok$/u.test(line)) {
+        writeFileSync(join(session, "run", "desktop-dir.txt"), `${desktop}\n`, "utf8");
+        desktopInjected = true;
+      }
       if (plan.twoCopies && !clipboardAdvanced && / W3 INFO two-candidates$/u.test(line)) {
         writeFileSync(join(session, "test-clipboard.txt"), `${key}\n`, "utf8");
         clipboardAdvanced = true;
@@ -300,6 +327,10 @@ async function driveWindow({ child, session, plan, key }) {
       }
       if (plan.keyVisible && / W3 WAITING owner copy-key$/u.test(line) && !decided.has("key-visible")) {
         if (helperDecision(session, "key-visible")) decided.add("key-visible");
+      }
+      if (plan.loadBeforeInstall && !loadInjected && / W6 INFO kit-sha$/u.test(line)) {
+        writeJson(join(session, "test-processes.json"), [{ CommandLine: "node brain.mjs load fixture", ProcessId: 8001 }]);
+        loadInjected = true;
       }
       const waiting = / (W\d+) WAITING lead ([a-z0-9-]+) id=([0-9a-f]{6}) words=/u.exec(line);
       if (waiting) {
@@ -353,8 +384,18 @@ async function main() {
   const kit = Buffer.from("fixture kit bytes\n", "utf8");
   sessionFacts.kit_bytes = kit.length;
   sessionFacts.kit_sha256 = sha256(kit);
+  sessionFacts.kit_url = `https://financialbrain.ai/kit/brain-installer-0.4.9-${sessionFacts.kit_sha256.slice(0, 16)}.tgz`;
   sessionFacts.runtime_payload_sha256 = "0".repeat(64);
   writeJson(factsPath, sessionFacts);
+  const driveState = {
+    done: { fixture: {} },
+    skipped: {},
+    removed: {},
+    drive_last_full_sweep_at: plan.driveReview ? "2000-01-01T00:00:00.000Z" : "2099-01-01T00:00:00.000Z"
+  };
+  if (plan.driveReview) driveState.drive_removal_review = { issue_code: "SAFETY_REVIEW_REQUIRED", counts: { unresolved_absences: 1 } };
+  writeJson(join(fixture.manifestDir, ".brain-ingest-drive.json"), driveState);
+  mkdirSync(join(fixture.home, "Desktop"), { recursive: true });
   const markerPath = join(fixture.session, "REHEARSAL.marker");
   if (!plan.tier2) {
     if (args.arm === "A11-empty") writeFileSync(markerPath, "", "ascii");
@@ -368,9 +409,11 @@ async function main() {
   else if (plan.twoCopies) writeFileSync(join(fixture.session, "test-clipboard.txt"), `${key} ${"b".repeat(40)}\n`, "utf8");
   else writeFileSync(join(fixture.session, "test-clipboard.txt"), `${key}\n`, "utf8");
   const scenarioPath = join(fixture.prefix, "scenario.json");
-  writeJson(scenarioPath, { version: "0.4.9", right_key_sha256: sha256(key), processes_path: processesPath, sequence: plan.sequence });
-  const stubCli = join(fixture.prefix, "node_modules", "brain-installer", "brain.mjs");
-  writeJson(join(fixture.session, "fb-test-step.json"), { command: fakeNode.executable, args: [stubCli, "--fixture-step"] });
+  writeJson(scenarioPath, scenarioForSupervisorArgv(plan.sequence, key, processesPath));
+  if (plan.w8) {
+    copyFileSync(join(here, "stub", "fb-google.mjs"), join(fixture.session, "fb-google.mjs"));
+    writeJson(join(fixture.session, "helper-scenario.json"), scenarioForSessionHelpers(plan.sequence));
+  }
   const helperGate = ["A11", "A11-empty", "A11-probe", "A11b-off"].includes(args.arm) ? await probeHelperGate(fixture.session) : null;
 
   let windowPath = join(fixture.session, "finish-window.txt");
@@ -411,12 +454,18 @@ async function main() {
   let stderr = "";
   childStream(bridge.stdout, (value) => { stdout += value; });
   childStream(bridge.stderr, (value) => { stderr += value; });
-  const driven = await driveWindow({ child: bridge, session: fixture.session, plan, key });
+  const driven = await driveWindow({ child: bridge, session: fixture.session, plan, key, desktop: join(fixture.home, "Desktop") });
   const actualStatus = lines(join(fixture.run, "status.txt"));
   const projected = projectStatus(actualStatus, spec.statuses);
   const stubCallsPath = join(fixture.prefix, "stub-calls.jsonl");
   const stubCalls = existsSync(stubCallsPath) ? readCalls(stubCallsPath) : [];
-  const calls = stubCalls.concat(stepMetaCalls(fixture.session).filter((call) => call.source === "step-meta" && !stubCalls.some((seen) => seen.command === call.command)));
+  const helperCallsPath = join(fixture.session, "helper-calls.jsonl");
+  const helperCalls = existsSync(helperCallsPath) ? readCalls(helperCallsPath) : [];
+  const allFixtureCalls = stubCalls.concat(helperCalls);
+  const silentStubCalls = silentExpectedStubCalls(allFixtureCalls);
+  const emptyStubSteps = emptyExpectedStubSteps(fixture.session);
+  const harnessVoid = silentStubCalls.length > 0 || emptyStubSteps.length > 0;
+  const calls = allFixtureCalls.concat(stepMetaCalls(fixture.session).filter((call) => call.source === "step-meta" && !allFixtureCalls.some((seen) => seen.command === call.command)));
   const receipt = existsSync(join(fixture.run, "bridge.json")) ? JSON.parse(readFileSync(join(fixture.run, "bridge.json"), "utf8")) : null;
   const controlPath = join(fixture.prefix, "fixture-controls.jsonl");
   const controls = existsSync(controlPath) ? readCalls(controlPath) : [];
@@ -424,12 +473,12 @@ async function main() {
   const registrationSites = [...helperSource.matchAll(/Register-ScheduledTask/gu)].length;
   const leaks = leakCounts(fixture.session, { key, ...fixture.canaries });
   const hostLimited = ["A6", "A6-hidden", "A15-dead", "A15-preview", "A15-scope", "A15-partial", "A15-full"].includes(args.arm);
-  const sessionReached = Boolean(receipt?.pass) && receipt.session === basename(fixture.session) && actualStatus.length > 0 && (projected.complete || hostLimited);
+  const sessionReached = !harnessVoid && Boolean(receipt?.pass) && receipt.session === basename(fixture.session) && actualStatus.length > 0 && (projected.complete || hostLimited);
   const result = {
     arm: args.arm,
     id: args.arm,
     target: "windows",
-    status: hostLimited ? (sessionReached && !driven.timedOut ? "skip" : "fail") : sessionReached && !driven.timedOut ? "pass" : "fail",
+    status: harnessVoid ? "void" : hostLimited ? (sessionReached && !driven.timedOut ? "skip" : "fail") : sessionReached && !driven.timedOut ? "pass" : "fail",
     host_limited: hostLimited,
     host_limit_reason: hostLimited ? (args.arm.startsWith("A15-") ? "interactive consent screen" : "interactive update prompt") : null,
     decision_point: {
@@ -453,6 +502,10 @@ async function main() {
       stdoutBytes: Buffer.byteLength(stdout),
       stderrBytes: Buffer.byteLength(stderr),
       timeSeam: args.arm === "PR002",
+      harnessVoid,
+      voidReason: harnessVoid ? "expected-stub-output-empty" : null,
+      emptyExpectedStubCalls: silentStubCalls.map((call) => call.command),
+      emptyExpectedStubSteps: emptyStubSteps,
       rawHits: controls.at(-1)?.raw_hits || {},
       pageShaExemptions: 0,
       helperGate,
@@ -467,7 +520,7 @@ async function main() {
     },
   };
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  process.exitCode = result.status === "fail" ? 1 : 0;
+  process.exitCode = ["pass", "skip"].includes(result.status) ? 0 : 1;
 }
 
 function childStream(stream, append) {

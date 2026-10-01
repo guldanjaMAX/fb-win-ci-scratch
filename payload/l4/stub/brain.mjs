@@ -23,7 +23,7 @@ function hash(value) {
 function priorCalls() {
   try {
     return readFileSync(callsPath, "utf8").trim().split(/\r?\n/).filter(Boolean)
-      .map((line) => JSON.parse(line)).filter((call) => call.command === command).length;
+      .map((line) => JSON.parse(line)).filter((call) => (call.invoked_command || call.command) === command).length;
   } catch {
     return 0;
   }
@@ -68,20 +68,26 @@ const action = fixtureStep
   ? scenario.sequence?.[Math.min(index, Math.max(0, (scenario.sequence?.length || 1) - 1))] || {}
   : scripts[Math.min(index, Math.max(0, scripts.length - 1))] || {};
 
+let outputBytes = 0;
+function emit(value) {
+  outputBytes += Buffer.byteLength(value);
+  process.stdout.write(value);
+}
+
 if (command === "version") {
-  process.stdout.write(`${scenario.version || "0.4.9"}\n`);
+  emit(`${scenario.version || "0.4.9"}\n`);
 }
 
 for (const line of action.lines || []) {
   const entry = entries.get(line.id);
   if (!entry) throw new Error(`unknown phrase id: ${line.id}`);
-  process.stdout.write(`${marked(line.kind || entry.kind, materialize(entry, line.inserts || []))}\n`);
+  emit(`${marked(line.kind || entry.kind, materialize(entry, line.inserts || []))}\n`);
 }
 
-for (const line of action.raw || []) process.stdout.write(`${line}\n`);
+for (const line of action.raw || []) emit(`${line}\n`);
 
 if (Array.isArray(action.leakParts)) {
-  process.stdout.write(`${action.leakParts.join("")}\n`);
+  emit(`${action.leakParts.join("")}\n`);
 }
 if (action.leak_classes) appendFileSync(controlsPath, `${JSON.stringify({ raw_hits: action.leak_classes })}\n`, "utf8");
 
@@ -90,13 +96,16 @@ const names = Object.keys(process.env).filter((name) => name.startsWith("CLOUDFL
 const key = process.env.CLOUDFLARE_API_TOKEN || "";
 const call = {
   command: action.label || command,
+  invoked_command: command,
   argv,
   cwd: process.cwd(),
   stdin_tty: process.stdin.isTTY === true,
   stdin_eof: input.eof,
   stdin_bytes: input.bytes,
   env_names: names,
-  key_matches: Boolean(scenario.right_key_sha256) && hash(key) === scenario.right_key_sha256
+  key_matches: Boolean(scenario.right_key_sha256) && hash(key) === scenario.right_key_sha256,
+  output_expected: action.expect_output === true || command === "version" || scenario.expected_output_commands?.includes(command) === true,
+  output_bytes: outputBytes
 };
 appendFileSync(callsPath, `${JSON.stringify(call)}\n`, { encoding: "utf8" });
 if (action.processes) writeFileSync(scenario.processes_path, `${JSON.stringify(action.processes)}\n`, "utf8");

@@ -8,5 +8,10 @@ export function validateRealSessionEvidence(result) {
   if (!Number.isInteger(result?.meta?.actualStatusCount) || result.meta.actualStatusCount < 1) errors.push("status-not-session-derived");
   if (!Array.isArray(result?.status_lines)) errors.push("status-lines-missing");
   if (result?.decision_point?.reached !== true) errors.push("decision-point-missed");
+  if (result?.meta?.harnessVoid === true) errors.push("harness-void");
   return { pass: errors.length === 0, errors };
+}
+
+export function silentExpectedStubCalls(calls) {
+  return (calls || []).filter((call) => call.output_expected === true && (!Number.isInteger(call.output_bytes) || call.output_bytes < 1));
 }

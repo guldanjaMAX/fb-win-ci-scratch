@@ -1,15 +1,15 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { checkLegacy } from "./check-phrases.mjs";
 import { checkMerged } from "./check-phrases-ci.mjs";
-import { freshKey, installStub, makeFakeNode, makeLargeDriveState, makeSession, scenarioFor } from "./fixtures.mjs";
+import { freshKey, installStub, makeFakeNode, makeLargeDriveState, makeSession, scenarioFor, scenarioForSessionHelpers, scenarioForSupervisorArgv } from "./fixtures.mjs";
 import { armSpecs } from "./reference/arms.mjs";
 import { canonical, detectSuspect, simulateArm, verifyArm } from "./reference/oracle.mjs";
 import { expectedRunnerNames, verifyRunnerArtifacts } from "./artifact-pins.mjs";
-import { validateRealSessionEvidence } from "./real-session-evidence.mjs";
+import { silentExpectedStubCalls, validateRealSessionEvidence } from "./real-session-evidence.mjs";
 import { applyProductionMutant, productionMutants } from "./production-mutants.mjs";
 
 let failures = 0;
@@ -58,11 +58,13 @@ const realSessionShape = {
   meta: { sessionEvidence: true, actualStatusCount: 1, sessionRunnerExit: 0, bridge: { pass: true, launched: true } }
 };
 check(validateRealSessionEvidence(realSessionShape).pass, "windows evidence guard accepts the complete real-session shape");
+const silentStub = [{ command: "verify", output_expected: true, output_bytes: 0 }];
+check(silentExpectedStubCalls(silentStub).length === 1, "expected empty stub output makes the harness VOID before product comparison");
 
 for (const [id, mutant] of Object.entries(productionMutants)) {
   const source = `before\n${mutant.find}\nafter\n`;
   const changed = applyProductionMutant(source, id);
-  check(changed !== source && changed.includes(mutant.replace), `${id} mutates copied production ${mutant.file}`);
+  check(changed !== source && changed.includes(mutant.replace), `${id} rewrite anchor applies to ${mutant.file}`);
 }
 
 const windowsSessionSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "windows-session.mjs"), "utf8");
@@ -71,6 +73,8 @@ const windowsFunctionSource = armRunnerSource.slice(armRunnerSource.indexOf("fun
 check(!windowsSessionSource.includes("simulateArm(") && !windowsSessionSource.includes("runStubArm("), "Windows session builder never sources evidence from oracle or stub targets");
 check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.includes("runStubArm("), "Windows arm path launches the per-arm session runner");
 check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
+check(!windowsSessionSource.includes("fb-test-step.json") && windowsSessionSource.includes("scenarioForSupervisorArgv"), "Windows fixtures use production argv instead of the dropped supervisor test environment");
+check(windowsSessionSource.includes("emptyExpectedStubSteps") && armRunnerSource.includes('result.status = "void"'), "empty expected stub output is preserved as VOID through the arm runner");
 
 const scratch = mkdtempSync(join(tmpdir(), "phrase-self-test-"));
 check(expectedRunnerNames().length === 9, "runner bridge pins helper plus eight served files");
@@ -117,6 +121,55 @@ check(stubRun.status === 0 && stubRun.stdout.startsWith("·    required D1 resto
 check(stubCall.stdin_tty === false && stubCall.stdin_eof === true && stubCall.stdin_bytes === 0, "stub records closed non-TTY stdin");
 check(stubCall.key_matches === true && !readFileSync(join(fixture.prefix, "stub-calls.jsonl"), "utf8").includes(key), "stub records key comparison without key text");
 check(!existsSync(join(fixture.prefix, "stub-brain-cmd-called.txt")), "node path did not invoke command trap");
+
+const argvRoot = join(scratch, "supervisor argv");
+const argvFixture = makeSession(argvRoot, { marker: "tier2\n" });
+const argvKey = freshKey();
+installStub(argvFixture.prefix, scenarioForSupervisorArgv([
+  { label: "verify", raw: ["Cloudflare access confirmed for account fixture"] }
+], argvKey));
+const argvCli = join(argvFixture.prefix, "node_modules", "brain-installer", "brain.mjs");
+const argvRun = spawnSync(process.execPath, [argvCli, "verify", argvFixture.manifest], {
+  cwd: argvFixture.session,
+  encoding: "utf8",
+  windowsHide: true,
+  shell: false,
+  stdio: ["ignore", "pipe", "pipe"],
+  env: { HOME: argvFixture.home, TMPDIR: process.env.TMPDIR, BRAIN_NO_WRANGLER_LOGIN: "1", CLOUDFLARE_API_TOKEN: argvKey }
+});
+check(argvRun.status === 0 && argvRun.stdout.includes("Cloudflare access confirmed"), "supervisor argv fixture emits expected verify output without a test-only environment name");
+
+const updateRoot = join(scratch, "supervisor update argv");
+const updateFixture = makeSession(updateRoot, { marker: "tier2\n" });
+const updateKey = freshKey();
+installStub(updateFixture.prefix, scenarioForSupervisorArgv([
+  { label: "update-preview", raw: ['{"pre_update_check_complete": true,', '"projection_ready": true,'] },
+  { label: "update", raw: ["required D1 restore bookmark captured", "Done. Your Brain is now on version 0.4.9 and passed its checks."] }
+], updateKey));
+const updateCli = join(updateFixture.prefix, "node_modules", "brain-installer", "brain.mjs");
+const updateEnv = { HOME: updateFixture.home, TMPDIR: process.env.TMPDIR, BRAIN_NO_WRANGLER_LOGIN: "1", CLOUDFLARE_API_TOKEN: updateKey };
+const previewRun = spawnSync(process.execPath, [updateCli, "update", updateFixture.manifest, "--preview", "--json"], { cwd: updateFixture.session, encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"], env: updateEnv });
+const updateRun = spawnSync(process.execPath, [updateCli, "update", updateFixture.manifest], { cwd: updateFixture.session, encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"], env: updateEnv });
+const updateCalls = readFileSync(join(updateFixture.prefix, "stub-calls.jsonl"), "utf8").trim().split(/\r?\n/u).map((line) => JSON.parse(line));
+check(previewRun.stdout.includes("pre_update_check_complete") && updateRun.stdout.includes("Done. Your Brain") && updateCalls.map((call) => call.command).join(",") === "update-preview,update", "repeated update argv advances from preview to update output");
+
+const helperScenario = scenarioForSessionHelpers([
+  { label: "google-lease", raw: ["fb:lease=free"] },
+  { label: "google-scopes", raw: ["fb:record=present"] },
+  { label: "google-scopes", raw: ["fb:record=present", "fb:account=same"] },
+  { label: "google-backup", raw: ["fb:backup=yes"] },
+  { label: "google-restore", raw: ["fb:restore=done"] },
+]);
+check(helperScenario.commands["google-scopes"].length === 2 && helperScenario.commands["google-restore"][0].raw[0] === "fb:restore=done", "session helper fixtures are selected by the supervisor's fixed helper argv");
+const helperRoot = join(scratch, "session helper argv");
+const helperFixture = makeSession(helperRoot, { marker: "tier2\nw8\n" });
+const helperStub = join(helperFixture.session, "fb-google.mjs");
+copyFileSync(join(dirname(fileURLToPath(import.meta.url)), "stub", "fb-google.mjs"), helperStub);
+writeFileSync(join(helperFixture.session, "helper-scenario.json"), `${JSON.stringify(helperScenario, null, 2)}\n`);
+const helperLease = spawnSync(process.execPath, [helperStub, "lease"], { cwd: helperFixture.session, encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"], env: { HOME: helperFixture.home, TMPDIR: process.env.TMPDIR, BRAIN_NO_WRANGLER_LOGIN: "1" } });
+const helperScopes1 = spawnSync(process.execPath, [helperStub, "scopes", "--prefix", helperFixture.prefix, "--phase", "pre"], { cwd: helperFixture.session, encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"], env: { HOME: helperFixture.home, TMPDIR: process.env.TMPDIR, BRAIN_NO_WRANGLER_LOGIN: "1" } });
+const helperScopes2 = spawnSync(process.execPath, [helperStub, "scopes", "--prefix", helperFixture.prefix, "--phase", "post"], { cwd: helperFixture.session, encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"], env: { HOME: helperFixture.home, TMPDIR: process.env.TMPDIR, BRAIN_NO_WRANGLER_LOGIN: "1" } });
+check(helperLease.stdout.includes("fb:lease=free") && helperScopes1.stdout.trim() === "fb:record=present" && helperScopes2.stdout.includes("fb:account=same"), "session helper stub advances repeated argv actions without environment routing");
 
 const fakeNode = makeFakeNode(stubRoot);
 const kitPath = join(fixture.run, "kit", "kit.tgz");
