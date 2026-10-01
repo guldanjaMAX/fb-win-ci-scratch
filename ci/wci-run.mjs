@@ -457,7 +457,7 @@ async function runAll({ root, output, spawnImpl = defaultSpawn, environment = pr
   await writeFailureDetails(output, root, "l4", l4.lines);
 
   const storeHarness = path.join(root, "payload", "l4", "windows-store-pull.mjs");
-  const storeHelper = path.join(root, "payload", "l1", "fb-win.mjs");
+  const storeHelper = path.join(root, "payload", "l1", "fb-store.mjs");
   const storeMissing = [];
   try { await readFile(storeHarness); } catch { storeMissing.push("l4"); }
   try { await readFile(storeHelper); } catch { storeMissing.push("l1"); }
@@ -506,7 +506,7 @@ async function runAll({ root, output, spawnImpl = defaultSpawn, environment = pr
       if (!result) storeLines.push(checkLine("store", arm, "FAIL", "result-missing"));
       else storeLines.push(checkLine("store", arm, result.status, result.reason));
       storeDetails.set(arm, [
-        `command=node payload/l4/windows-store-pull.mjs --helper payload/l1/fb-win.mjs`,
+        `command=node payload/l4/windows-store-pull.mjs --helper payload/l1/fb-store.mjs`,
         `runner-exit=${storeRun.status ?? storeRun.error?.code ?? "unknown"}`,
         `result=${result?.status ?? "missing"}`,
         `reason=${result?.reason ?? "result-missing"}`,

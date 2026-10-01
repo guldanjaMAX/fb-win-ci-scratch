@@ -3,7 +3,7 @@ $Host.UI.RawUI.WindowTitle = '@@TITLE@@'
 $SessionDir = '@@SESSION@@'
 $RunDir = '@@RUN@@'
 [IO.Directory]::CreateDirectory($RunDir) | Out-Null
-$Started = (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+$Started = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
 $Lf = [char]10
 $Lock = "pid=$PID" + $Lf + "start=$Started" + $Lf
 [IO.File]::WriteAllText((Join-Path $RunDir 'window.lock'), $Lock, [Text.Encoding]::ASCII)

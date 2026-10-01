@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -11,20 +11,25 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TASK_NAME = "Financial Brain store data 8AM";
 const SUCCESS = "Store data will now load every day at 8:00 AM.";
 const ARMS = ["S8-REG", "S8-REFUSE", "S8-LIVE-WINDOW"];
+const EXPECTED_HELPER = resolve(dirname(fileURLToPath(import.meta.url)), "..", "l1", "fb-store.mjs");
 
 function parseArgs(argv) {
-  const out = {};
+  const out = { helper: EXPECTED_HELPER };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === "--helper") out.helper = resolve(argv[++index]);
+    if (value === "--helper") {
+      const supplied = resolve(argv[++index]);
+      if (supplied !== EXPECTED_HELPER) throw new Error("helper-must-be-payload-l1-fb-store");
+    }
     else if (value === "--out") out.out = resolve(argv[++index]);
     else throw new Error("bad-args");
   }
-  if (!out.helper || !out.out) throw new Error("bad-args");
+  if (!out.out) throw new Error("bad-args");
   return out;
 }
 
@@ -73,10 +78,22 @@ function unregisterTask() {
   const result = runPowerShell(String.raw`$ErrorActionPreference = 'Stop'
 $Task = Get-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
 if ($null -ne $Task) {
-  if ([string]$Task.State -eq 'Running') { Stop-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue }
+  Stop-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
+  $StopDeadline = [DateTime]::UtcNow.AddSeconds(20)
+  do {
+    $Task = Get-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
+    if ($null -eq $Task -or [string]$Task.State -ne 'Running') { break }
+    Start-Sleep -Milliseconds 200
+  } while ([DateTime]::UtcNow -lt $StopDeadline)
+  if ($null -ne $Task -and [string]$Task.State -eq 'Running') { throw 'task did not stop' }
   Unregister-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -Confirm:$false
 }
-$Remaining = Get-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
+$RemoveDeadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
+  $Remaining = Get-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
+  if ($null -eq $Remaining) { break }
+  Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $RemoveDeadline)
 if ($null -ne $Remaining) { throw 'task remained registered' }
 `);
   assert.equal(result.status, 0, `task-cleanup-failed status=${result.status} signal=${result.signal ?? "none"} error=${result.error?.code ?? "none"}`);
@@ -136,6 +153,17 @@ function processCreation(pid) {
   return result.stdout.trim();
 }
 
+function waitForProcessExit(pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = runPowerShell(`$Process = Get-Process -Id ${pid} -ErrorAction SilentlyContinue\nif ($null -ne $Process) { [Console]::Out.Write('1') }\n`);
+    assert.equal(result.status, 0, "live-process-exit-query-failed");
+    if (result.stdout.trim() !== "1") return true;
+    pause(100);
+  }
+  return false;
+}
+
 function waitFor(path, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -182,14 +210,14 @@ function makeFixture(root, helper, { customApi = true } = {}) {
   mkdirSync(dirname(cli), { recursive: true });
   mkdirSync(join(session, "run"), { recursive: true });
   mkdirSync(home, { recursive: true });
-  copyFileSync(helper, join(session, "fb-win.mjs"));
+  copyFileSync(helper, join(session, "fb-store.mjs"));
   writeFileSync(cli, stubSource(), "utf8");
   const corpora = customApi ? { custom_api: { cadence: 86400 } } : {};
   writeFileSync(manifest, `${JSON.stringify({ corpora, fixture_record: record })}\n`, "utf8");
   writeFileSync(join(session, "selected-prefix-fixture.txt"), `${prefix}\n`, "utf8");
   writeFileSync(join(session, "selected-manifest-fixture.txt"), `${manifest}\n`, "utf8");
   writeFileSync(join(session, "fixture-admin-key.txt"), "fixture-only\n", { encoding: "ascii", mode: 0o600 });
-  return { root, session, prefix, home, manifest, record, helper: join(session, "fb-win.mjs") };
+  return { root, session, prefix, home, manifest, record, helper: join(session, "fb-store.mjs") };
 }
 
 function runHelper(fixture, verb) {
@@ -296,21 +324,41 @@ function runManifestRefusalArm(helper, root) {
 
 function runLiveWindowArm(helper, root) {
   const fixture = makeFixture(join(root, "live-window"), helper);
-  const started = processCreation(process.pid);
-  writeFileSync(join(fixture.session, "run", "window.lock"), `pid=${process.pid}\nstart=${started}\n`, "ascii");
-  writeFileSync(join(fixture.session, "run", "status.txt"), [
-    "2026-10-01T13:59:00Z W11 DONE done",
-    "2026-10-01T14:00:00Z RUN START start",
-    "",
-  ].join("\n"), "ascii");
-  unregisterTask();
-  const result = runHelper(fixture, "schedule-store-pull");
-  assert.notEqual(result.status, 0, "live-window-refusal-exit-zero");
-  assert.equal(result.stdout, "The update window is still working.\n", "live-window-refusal-output-wrong");
-  assert.equal(result.stderr, "", "live-window-refusal-stderr-not-empty");
-  assert.equal(taskCount(), 0, "live-window-refusal-created-task");
-  assert.equal(existsSync(fixture.record), false, "live-window-refusal-ran-pull");
-  return "live-lock-decision-reached-no-task";
+  const live = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+    cwd: fixture.session,
+    env: closedEnvironment({
+      HOME: fixture.home,
+      USERPROFILE: fixture.home,
+      TEMP: fixture.home,
+      TMP: fixture.home,
+      BRAIN_NO_WRANGLER_LOGIN: "1",
+    }),
+    windowsHide: true,
+    shell: false,
+    stdio: "ignore",
+  });
+  assert.ok(Number.isSafeInteger(live.pid) && live.pid > 0, "live-process-not-started");
+  try {
+    const started = new Date().toISOString();
+    writeFileSync(join(fixture.session, "run", "window.lock"), `pid=${live.pid}\nstart=${started}\n`, "ascii");
+    writeFileSync(join(fixture.session, "run", "status.txt"), [
+      "2026-10-01T13:59:00Z W11 DONE done",
+      "2026-10-01T14:00:00Z RUN START start",
+      "",
+    ].join("\n"), "ascii");
+    unregisterTask();
+    const result = runHelper(fixture, "schedule-store-pull");
+    assert.notEqual(result.status, 0, "live-window-refusal-exit-zero");
+    assert.equal(result.stdout, "The update window is still working.\n", "live-window-refusal-output-wrong");
+    assert.equal(result.stderr, "", "live-window-refusal-stderr-not-empty");
+    assert.equal(taskCount(), 0, "live-window-refusal-created-task");
+    assert.equal(existsSync(fixture.record), false, "live-window-refusal-ran-pull");
+    assert.ok(Math.abs(Date.parse(processCreation(live.pid)) - Date.parse(started)) <= 2000, "live-lock-identity-window-missed");
+    return "live-lock-decision-reached-no-task";
+  } finally {
+    assert.equal(live.kill(), true, "live-process-kill-failed");
+    assert.equal(waitForProcessExit(live.pid), true, "live-process-did-not-exit");
+  }
 }
 
 function runArm(id, helper, root) {

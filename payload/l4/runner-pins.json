@@ -4,8 +4,8 @@
     {
       "name": "fb-win.mjs",
       "source": "payload/l1/fb-win.mjs",
-      "bytes": 36055,
-      "sha256": "b6d487ddab700a9b1f730d3ded8f7f60b7ebbc6f0cfcceddfde00d769b820599"
+      "bytes": 27035,
+      "sha256": "2a29524f0e30d3f84d1b50a2dc830467a9b10c422e78259544be3647fc174c10"
     },
     {
       "name": "finish-window.txt",

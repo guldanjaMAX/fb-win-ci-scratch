@@ -76,7 +76,8 @@ check(!windowsSessionSource.includes("simulateArm(") && !windowsSessionSource.in
 check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.includes("runStubArm("), "Windows arm path launches the per-arm session runner");
 check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
 check(["R-NPM", "R-NPM-FOREIGN", "R-REG", "R-REG-control", "R-CLOSE"].every((id) => armSpecs.some((arm) => arm.id === id)), "five real-path Windows arms are registered");
-check(windowsStorePullSource.includes("Stop-ScheduledTask") && windowsStorePullSource.includes("task remained registered"), "store harness cleanup stops a stale running task and proves removal by readback");
+check(windowsStorePullSource.includes('"..", "l1", "fb-store.mjs"') && !windowsStorePullSource.includes('join(session, "fb-win.mjs")'), "store pull Windows arms target payload/l1/fb-store.mjs instead of the main helper");
+check(windowsStorePullSource.includes("Stop-ScheduledTask") && windowsStorePullSource.includes("$StopDeadline") && windowsStorePullSource.includes("$RemoveDeadline") && windowsStorePullSource.includes("task remained registered"), "store harness cleanup waits for stop and proves removal by readback");
 const npmOwnedControl = simulateArm("R-NPM");
 const foreignNpmControl = simulateArm("R-NPM-FOREIGN");
 const missedForeignRefusal = structuredClone(foreignNpmControl);
@@ -93,6 +94,7 @@ check(windowsStorePullSource.indexOf('"S8-REG"') < windowsStorePullSource.indexO
 check(windowsStorePullSource.includes("taskSnapshot()") && windowsStorePullSource.includes("Start-ScheduledTask") && windowsStorePullSource.includes("stub-call-count-not-one"), "store pull registration is read back and its exact CLI action is started once");
 check(windowsStorePullSource.includes("MainWindowHandle") && windowsStorePullSource.includes("CreateNoWindow") && windowsStorePullSource.includes("WindowStyle"), "store pull Windows arm checks both hidden configuration and the live child window handle");
 check(windowsStorePullSource.includes("custom-api-decision-reached-no-task") && windowsStorePullSource.includes("live-lock-decision-reached-no-task"), "store pull refusal arms prove their decision points without a scheduled task");
+check(windowsStorePullSource.includes("const live = spawn(process.execPath") && windowsStorePullSource.includes("new Date().toISOString()") && windowsStorePullSource.includes("live-lock-identity-window-missed"), "live-window arm uses the run-18 Get-Date lock shape with a process started by the harness");
 check(!windowsStorePullSource.includes("windows-session.mjs"), "store pull arms stay isolated from the concurrently edited Windows session harness");
 
 const scratch = mkdtempSync(join(tmpdir(), "phrase-self-test-"));

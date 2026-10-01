@@ -9,7 +9,6 @@ const outDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const sourcePath = join(outDir, "fb-win.mjs");
 const helperTest = join(outDir, "test", "helper.test.mjs");
 const staticTest = join(outDir, "test", "static.test.mjs");
-const storePullTest = join(outDir, "test", "store-pull.test.mjs");
 const source = await readFile(sourcePath, "utf8");
 const scratch = await mkdtemp(join(tmpdir(), "fb-mutants-"));
 const mutantTmp = join(scratch, "tmp");
@@ -29,7 +28,6 @@ const arms = [
   ["M11", "test 1", "if (Object.hasOwn(facts, \"marker\") && facts.marker !== MARKER_NAME) {", "if (false && Object.hasOwn(facts, \"marker\") && facts.marker !== MARKER_NAME) {"],
   ["M12", "test 1", "const markerOn = await markerTurnsOn(join(sessionDir, MARKER_NAME));", "const markerOn = Boolean(await readMaybe(join(sessionDir, MARKER_NAME)));"],
   ["M13", "test 1", "const enabled = facts.tier2 === \"on\" || facts.w8 === \"on\" || markerOn;", "const enabled = facts.tier2 === \"on\" || markerOn;"],
-  ["M14", "test 13", "if (!done && await storeWindowAlive({ sessionDir, queryProcess })) {", "if (false && !done && await storeWindowAlive({ sessionDir, queryProcess })) {"],
 ];
 
 try {
@@ -39,7 +37,7 @@ try {
     const mutant = source.replace(before, after);
     const path = join(scratch, `${id}.mjs`);
     await writeFile(path, mutant, "utf8");
-    const result = spawnSync(process.execPath, ["--test", helperTest, staticTest, storePullTest], {
+    const result = spawnSync(process.execPath, ["--test", helperTest, staticTest], {
       encoding: "utf8",
       cwd: scratch,
       env: {
