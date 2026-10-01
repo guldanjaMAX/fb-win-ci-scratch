@@ -10,14 +10,14 @@
     {
       "name": "finish-window.txt",
       "source": "payload/assembled/finish-window.txt",
-      "bytes": 84768,
-      "sha256": "59bcc5dd7411afe480eb04645d653be8e734f0df0c54621d72af437c4a7d540f"
+      "bytes": 84918,
+      "sha256": "fc5cc69c95db1dbdc94a9cd8068b11ad092f6ec03e6a5830a31028d7cfe85673"
     },
     {
       "name": "fb-run.mjs",
       "source": "payload/l2b/fb-run.mjs",
-      "bytes": 35083,
-      "sha256": "435c768787b9258ac414b481088fea0f22555c6cb51c56eb0752d708d654332f"
+      "bytes": 35104,
+      "sha256": "56950b8d489e6a45f483a0075b1402d829870baa71e7f9f33585f5d8a2116705"
     },
     {
       "name": "fb-drive-state.mjs",

@@ -452,7 +452,7 @@ function Complete-FbW7 {
                 if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
-            if (@('dead','update-busy','network','unknown-update') -ccontains $result.Class) {
+            if (@('dead','update-busy','network') -ccontains $result.Class) {
                 $choice = Wait-FbDecision -Step 'W7' -Reason 'update-retry' -Words @('continue','stop')
                 if ($choice -cne 'continue') {
                     Write-FbW7Failed -Detail 'complete-retry-declined'

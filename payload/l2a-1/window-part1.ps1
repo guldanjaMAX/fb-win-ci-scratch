@@ -216,6 +216,10 @@ function Invoke-FbW1 {
         elseif (-not $processes.Load -and (-not $FB.HealthRead -or $FB.HealthResult.Class -cne 'health-paused')) { Show-FbLine -Key 'W1-UPDATE-CAN' }
 
         if ($FB.Rejoin) { return 'pass' }
+        if ($FB.HealthRead -and $FB.HealthResult.Class -ceq 'health-unreadable') {
+            Show-FbLine -Key 'W1-CHECK'
+            return 'finish-later'
+        }
         if ($FB.HealthRead -and $FB.HealthResult.Class -ceq 'health-paused') {
             if (-not $FB.Tier2On) { return 'pass' }
             $choice = Wait-FbDecision -Step 'W1' -Reason 'brain-paused' -Words @('continue','deploy-recover','finish-later')

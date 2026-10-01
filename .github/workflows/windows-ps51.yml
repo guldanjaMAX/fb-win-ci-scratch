@@ -14,7 +14,7 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,10 +32,17 @@ jobs:
         shell: powershell
         env:
           WCI: '1'
-        run: node ci/wci-run.mjs --out ci-out
+        run: |
+          node --test ci/slim-artifact.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node ci/wci-run.mjs --out ci-out
+      - name: Prepare slim review artifact
+        if: always()
+        shell: powershell
+        run: node ci/slim-artifact.mjs --source ci-out --out ci-artifact
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: windows-ps51-results
-          path: ci-out
+          path: ci-artifact
           retention-days: 3

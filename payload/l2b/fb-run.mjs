@@ -604,14 +604,15 @@ class Classifier {
       }
       if (!entryMatches(entry, line)) continue;
       matchedPhrase = true;
+      if (entry.capture) {
+        const captured = line.match(new RegExp(entry.capture, "u"));
+        if (captured?.[1]) this.emit("metric", `${entry.value === "health-pending" ? "pending" : entry.value}=${captured[1].replaceAll(",", "")}`);
+      }
       if (entry.kind === "stage") {
         // MUTANT_M8_AFTER
         if (Number(entry.n) > this.lastStage && (entry.after === undefined || this.lastStage >= Number(entry.after))) stages.push(entry);
       } else if (entry.kind === "class") {
         this.addClass(entry);
-      } else if (entry.kind === "metric" && entry.capture) {
-        const captured = line.match(new RegExp(entry.capture, "u"));
-        if (captured?.[1]) this.emit("metric", `${entry.value}=${captured[1].replaceAll(",", "")}`);
       }
     }
     if (stages.length) {

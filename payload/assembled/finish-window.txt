@@ -656,6 +656,10 @@ function Invoke-FbW1 {
         elseif (-not $processes.Load -and (-not $FB.HealthRead -or $FB.HealthResult.Class -cne 'health-paused')) { Show-FbLine -Key 'W1-UPDATE-CAN' }
 
         if ($FB.Rejoin) { return 'pass' }
+        if ($FB.HealthRead -and $FB.HealthResult.Class -ceq 'health-unreadable') {
+            Show-FbLine -Key 'W1-CHECK'
+            return 'finish-later'
+        }
         if ($FB.HealthRead -and $FB.HealthResult.Class -ceq 'health-paused') {
             if (-not $FB.Tier2On) { return 'pass' }
             $choice = Wait-FbDecision -Step 'W1' -Reason 'brain-paused' -Words @('continue','deploy-recover','finish-later')
@@ -1468,7 +1472,7 @@ function Complete-FbW7 {
                 if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
-            if (@('dead','update-busy','network','unknown-update') -ccontains $result.Class) {
+            if (@('dead','update-busy','network') -ccontains $result.Class) {
                 $choice = Wait-FbDecision -Step 'W7' -Reason 'update-retry' -Words @('continue','stop')
                 if ($choice -cne 'continue') {
                     Write-FbW7Failed -Detail 'complete-retry-declined'

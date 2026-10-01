@@ -80,8 +80,8 @@ const updateNetwork = () => raw("update", "Your internet connection dropped whil
 const updateQueued = () => raw("update", "This Brain is still paused for an update that has not finished, and it has 1 queued search update", { exit: 1 });
 const updateQueueFirst = () => raw("update", "Your Brain is still indexing 1 recent items so they can be found by meaning. Updating now would interrupt that, so nothing was changed. You can keep using your Brain. Run brain update again later.", { exit: 1 });
 const updateUnknown = () => raw("update", "update stopped during unknown stage", { exit: 1 });
-const updatePrompt = (hidden = false) => raw("update", hidden ? "Enter a newly created scoped API token in the hidden prompt now? (y/n)" : "Use recovery API-token access now? (y/n)", { exit: 1 });
-const updatePendingMigration = () => raw("update", ["applying 20260930_fixture", "upgrade verified, now at 0.4.9"], { exit: 0 });
+const updatePrompt = (hidden = false) => raw("update", hidden ? "Enter a newly created scoped API token in the hidden prompt now? (y/n)" : "Use recovery API-token access now? (y/n)", { exit: 1, readStdin: true });
+const updatePendingMigration = () => raw("update", ["applying 0049_fixture", "upgrade verified, now at 0.4.9"], { exit: 0 });
 
 function commonPrefix({ health = ready(), history = false } = {}) {
   return [nodeVersion(), version(), drive(), health, keyOk()];
@@ -98,7 +98,7 @@ function successTail(update = updateVerified()) {
 function w8Plan(id) {
   const boot = [nodeVersion(), version(), drive(), ready()];
   const lease = facts("google-lease", { lease: "free" });
-  const pre = facts("google-scopes", { record: "yes", account_hash: "abc123", granted_drive: "yes", granted_gmail: "yes", granted_calendar: "yes" });
+  const pre = facts("google-scopes", { record: "yes", account_hash: "abc123", granted_drive: "yes", granted_gmail: "yes", granted_calendar: id === "A15-partial" ? "no" : "yes" });
   const calendarReconnect = raw("google-calendar-check", "Reconnect with `brain connect google --scopes drive,gmail,calendar`, then retry the preview.", { exit: 1 });
   const finish = [ready(), version()];
   if (id === "A15-lock") return [...boot, facts("google-lease", { lease: "busy" }), ...finish];
@@ -115,7 +115,7 @@ function w8Plan(id) {
   const connected = raw("google-connect", "connected. Token stored in fixture");
   if (id === "PR002") {
     return [...boot, lease, pre, calendarReconnect, secondLease, backup,
-      raw("google-connect", "connected. Token stored in fixture", { delay_ms: 1500 }),
+      raw("google-connect", "connected. Token stored in fixture", { delay_ms: 5000 }),
       facts("google-restore", { restore: "done" }), ...finish];
   }
   if (id === "A15-partial") {
@@ -153,17 +153,17 @@ function planFor(id, processesPath) {
   if (id.startsWith("A4")) return { ...plan, decisions: { "W7 update-queued": id === "A4-deploy" ? "deploy-recover" : "finish-later" }, sequence: [...commonPrefix(), ...preUpdate(), updateQueued(), ...(id === "A4-deploy" ? [raw("deploy", 'deployed "recovery"')] : []), ready(), version()] };
   if (id === "A5-exit") return { ...plan, sequence: [...commonPrefix(), ...preUpdate(), updateUnknown(), ready(), version()] };
   if (id === "A6" || id === "A6-hidden") return { ...plan, sequence: [...commonPrefix(), ...preUpdate(), updatePrompt(id.endsWith("hidden")), ready(), version()] };
-  if (id === "A7") return { ...plan, decisions: { "W7 update-retry": "stop" }, sequence: [...commonPrefix(), ...preUpdate(), raw("update", [], { exit: 1, leakParts: Object.values(splitCanaries()), leak_classes: { key: 1, hex64: 1, bookmark: 1, account: 1, email: 1 } }), ready(), version()] };
+  if (id === "A7") return { ...plan, decisions: { "W7 update-retry": "stop" }, sequence: [...commonPrefix(), ...preUpdate(), raw("update", ["Your internet connection dropped while talking to Cloudflare."], { exit: 1, leakParts: Object.values(splitCanaries()), leak_classes: { key: 1, hex64: 1, bookmark: 1, account: 1, email: 1 } }), ready(), version()] };
   if (id === "A9") return { ...plan, sequence: [nodeVersion(), version(), drive(), sac("health"), sac("health"), ready(), keyOk(), ...successTail()] };
   if (id === "A9-three") return { ...plan, sequence: [nodeVersion(), version(), drive(), sac("health"), sac("health"), sac("health"), keyOk(), ready(), version()] };
   if (id === "A9-write") return { ...plan, decisions: { "W7 update-retry": "stop" }, sequence: [...commonPrefix(), ...preUpdate(), updateNetwork(), ready(), version()] };
   if (id === "A10") return { ...plan, repeatClipboard: true, sequence: [nodeVersion(), version(), drive(), ready(), keyBad(), keyBad(), ready(), version()] };
   if (id === "A10-control") return { ...plan, repeatClipboard: true, sequence: [nodeVersion(), version(), drive(), ready(), keyBad(), keyOk(), edit(), fetchOk(), installOk(), version(), previewOk(), updateVerified(), edit(), ready(), version()] };
   if (id === "A10-short") return { ...plan, shortClipboard: true, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
-  if (id === "A17") return { ...plan, keyVisible: true, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
-  if (id === "A12-review") return { ...plan, driveReview: true, sequence: [nodeVersion(), version(), drive({ drive_state: "pending", terminal: "no", review: "yes" }), ready(), keyOk(), edit(), ready(), version()] };
+  if (id === "A17") return { ...plan, keyVisible: true, emptyClipboard: true, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
+  if (id === "A12-review") return { ...plan, driveReview: true, sequence: [nodeVersion(), version(), drive({ drive_state: "pending", terminal: "no", review: "yes" }), ready(), keyOk(), ...successTail()] };
   if (id === "A13") return { ...plan, sequence: [...commonPrefix(), ...preUpdate(), updatePendingMigration(), ready(), version()] };
-  if (id === "A16") return { ...plan, sequence: commonPrefix().concat([edit(), facts("kit-fetch", { reason: "sha" }, { exit: 1 }), ready(), version()]) };
+  if (id === "A16") return { ...plan, kitShaMismatch: true, sequence: commonPrefix().concat([edit(), ready(), version()]) };
   if (id === "PR004") return { ...plan, decisions: { "W7 update-retry": "continue" }, sequence: [...commonPrefix(), ...preUpdate(), updateCpu(), update503(), updateNetwork(), updateVerified(), ready(), version()] };
   if (id === "PR005") return { ...plan, loadBeforeInstall: true, sequence: commonPrefix().concat([edit(), fetchOk(), ready(), version()]) };
   return { ...plan, sequence: commonPrefix().concat(successTail()) };
@@ -191,6 +191,7 @@ function prepareRejoin(session, mode) {
   writeJson(join(session, "test-processes.json"), [{ CommandLine: "node brain.mjs update fixture", ProcessId: 8100 }]);
   writeFileSync(join(folder, "meta.txt"), "step=update\nattempt=1\nstarted=fixture\nchild_pid=8100\nchild_start=fixture-start\n", "utf8");
   if (mode === "dead") {
+    writeFileSync(join(folder, "out.log"), "fixture update started\n", "utf8");
     const alive = join(folder, "alive.txt");
     writeFileSync(alive, "2026-01-01T00:00:00.000Z\n", "utf8");
     const old = new Date(Date.now() - 120_000);
@@ -328,7 +329,7 @@ async function driveWindow({ child, session, plan, key, desktop }) {
       if (plan.keyVisible && / W3 WAITING owner copy-key$/u.test(line) && !decided.has("key-visible")) {
         if (helperDecision(session, "key-visible")) decided.add("key-visible");
       }
-      if (plan.loadBeforeInstall && !loadInjected && / W6 INFO kit-sha$/u.test(line)) {
+      if (plan.loadBeforeInstall && !loadInjected && stepMetaCalls(session).some((call) => call.command === "kit-fetch")) {
         writeJson(join(session, "test-processes.json"), [{ CommandLine: "node brain.mjs load fixture", ProcessId: 8001 }]);
         loadInjected = true;
       }
@@ -383,7 +384,7 @@ async function main() {
   sessionFacts.history_delete_proven = plan.history;
   const kit = Buffer.from("fixture kit bytes\n", "utf8");
   sessionFacts.kit_bytes = kit.length;
-  sessionFacts.kit_sha256 = sha256(kit);
+  sessionFacts.kit_sha256 = plan.kitShaMismatch ? "f".repeat(64) : sha256(kit);
   sessionFacts.kit_url = `https://financialbrain.ai/kit/brain-installer-0.4.9-${sessionFacts.kit_sha256.slice(0, 16)}.tgz`;
   sessionFacts.runtime_payload_sha256 = "0".repeat(64);
   writeJson(factsPath, sessionFacts);
@@ -405,7 +406,7 @@ async function main() {
   mkdirSync(join(fixture.run, "kit"), { recursive: true });
   writeFileSync(join(fixture.run, "kit", "tgz"), kit);
   writeJson(join(fixture.session, "test-history.json"), { enabled: plan.history, delete_ok: true, remaining_matches: 0 });
-  if (plan.shortClipboard) writeFileSync(join(fixture.session, "test-clipboard.txt"), "short\n", "utf8");
+  if (plan.shortClipboard || plan.emptyClipboard) writeFileSync(join(fixture.session, "test-clipboard.txt"), "short\n", "utf8");
   else if (plan.twoCopies) writeFileSync(join(fixture.session, "test-clipboard.txt"), `${key} ${"b".repeat(40)}\n`, "utf8");
   else writeFileSync(join(fixture.session, "test-clipboard.txt"), `${key}\n`, "utf8");
   const scenarioPath = join(fixture.prefix, "scenario.json");
@@ -471,6 +472,7 @@ async function main() {
   const receipt = existsSync(join(fixture.run, "bridge.json")) ? JSON.parse(readFileSync(join(fixture.run, "bridge.json"), "utf8")) : null;
   const controlPath = join(fixture.prefix, "fixture-controls.jsonl");
   const controls = existsSync(controlPath) ? readCalls(controlPath) : [];
+  const stdinCall = stubCalls.findLast((call) => call.command === "update");
   const helperSource = readFileSync(join(fixture.session, "fb-win.mjs"), "utf8");
   const registrationSites = [...helperSource.matchAll(/Register-ScheduledTask/gu)].length;
   const leaks = leakCounts(fixture.session, { key, ...fixture.canaries });
@@ -514,6 +516,9 @@ async function main() {
         recordedCalls: npmCalls.length,
       },
       rawHits: controls.at(-1)?.raw_hits || {},
+      stdinTty: stdinCall?.stdin_tty,
+      stdinEof: stdinCall?.stdin_eof,
+      stdinBytes: stdinCall?.stdin_bytes,
       pageShaExemptions: 0,
       helperGate,
       helperOutput: helperGate ? Array.from({ length: helperGate.outputCount }, () => "session-output") : [],
