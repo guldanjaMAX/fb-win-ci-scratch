@@ -126,9 +126,12 @@ test("DPAPI reads in a second process and rejects a tampered copy", { skip: SKIP
   assert.deepEqual(readFileSync(recovered), Buffer.from(plain, "ascii"));
 
   const text = readFileSync(cipher, "utf8").trim();
-  // Change the blob's first hex digit to a different value (same place the CI's own DPAPI tamper control changes).
-  // A middle digit can land on a case-only change (hex is case-insensitive) or outside what DPAPI checks.
-  const changed = (/^[aA]/.test(text) ? "B" : "A") + text.slice(1);
+  // Change one hex digit inside the blob's trailing signature to a different value. DPAPI must refuse it.
+  // (A case-only change is no change at all, and the leading version field is not what DPAPI authenticates.)
+  const at = text.length - 2;
+  const digit = text[at].toLowerCase();
+  const changed = text.slice(0, at) + (digit === "0" ? "1" : "0") + text.slice(at + 1);
+  assert.notEqual(changed.toLowerCase(), text.toLowerCase());
   const tampered = join(dir, "tampered.dpapi");
   writeFileSync(tampered, changed, "ascii");
   const check = `$Ascii=New-Object Text.ASCIIEncoding; [IO.File]::WriteAllText(${psQuote(reached)},'yes',$Ascii); try { $Cipher=[IO.File]::ReadAllText(${psQuote(tampered)},$Ascii); $null=ConvertTo-SecureString -String $Cipher; exit 3 } catch { exit 0 }`;
