@@ -75,6 +75,13 @@ if (!isWindows) {
     assert.equal(process.platform, "win32", "WCI requested a Windows test on another host");
   });
 } else {
+  test("module-relative test paths use native Windows conversion", async () => {
+    const outDir = fileURLToPath(new URL("..", import.meta.url));
+    assert.equal(win32.isAbsolute(outDir), true);
+    await readFile(join(outDir, "ps", "stub.ps1"));
+    await readFile(join(outDir, "ps", "register.ps1"));
+  });
+
   test("Windows-only scheduler, visible action, stub refusal, and parser proof", { timeout: 180_000 }, async () => {
     const item = await buildFixture();
     const taskName = `WCI update ${randomBytes(4).toString("hex")}`;

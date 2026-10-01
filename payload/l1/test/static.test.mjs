@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 
-const outDir = resolve(new URL("..", import.meta.url).pathname);
+const outDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const helperPath = process.env.HELPER_PATH ? resolve(process.env.HELPER_PATH) : join(outDir, "fb-win.mjs");
 const stubPath = join(outDir, "ps", "stub.ps1");
 const registerPath = join(outDir, "ps", "register.ps1");

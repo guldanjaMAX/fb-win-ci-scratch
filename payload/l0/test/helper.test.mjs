@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -219,20 +219,29 @@ test("7 session folder comes from the helper location, not cwd", async () => {
   const dir = scratch("session-own");
   const other = scratch("session-cwd");
   const copied = join(dir, "fb-probe.mjs");
-  await cp(HELPER, copied);
-  writeFileSync(join(dir, "REHEARSAL.marker"), "probe-sentence\n");
-  const stdout = execFileSync(process.execPath, [copied, "start"], {
-    cwd: other,
-    encoding: "utf8",
-    env: { ...process.env },
-    shell: false,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 30_000,
-  });
-  assert.match(stdout, /^SAY: This probe only runs on Windows\./m);
-  await rm(dir, { recursive: true, force: true });
-  await rm(other, { recursive: true, force: true });
+  try {
+    await cp(HELPER, copied);
+    writeFileSync(join(dir, "REHEARSAL.marker"), "probe-sentence\n");
+    const stdout = execFileSync(process.execPath, [copied, "start"], {
+      cwd: other,
+      encoding: "utf8",
+      env: { ...process.env },
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+    });
+    if (process.platform === "win32") {
+      assert.match(stdout, /^READY$/m);
+      assert.equal(existsSync(join(dir, "probe-results.txt")), true);
+      assert.equal(existsSync(join(other, "probe-results.txt")), false);
+    } else {
+      assert.match(stdout, /^SAY: This probe only runs on Windows\./m);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(other, { recursive: true, force: true });
+  }
 });
 
 test("8 embedded PowerShell sources are byte-identical", async () => {

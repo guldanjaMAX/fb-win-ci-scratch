@@ -70,7 +70,8 @@ if ($Phase -eq '2') {
   try {
     $PrefixLine = @(Get-Content -LiteralPath (Join-Path $ProbeDir 'phase1.txt') | Where-Object { $_ -like 'dpapi_prefix=*' })[-1]
     $ExpectedPrefix = $PrefixLine.Substring('dpapi_prefix='.Length)
-    $Secure = Get-Content -LiteralPath $CipherPath -Raw | ConvertTo-SecureString
+    $Cipher = [IO.File]::ReadAllText($CipherPath, [Text.Encoding]::ASCII)
+    $Secure = ConvertTo-SecureString -String $Cipher
     $Bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure)
     try { $Plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($Bstr) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Bstr) }
@@ -78,13 +79,13 @@ if ($Phase -eq '2') {
     $Plain = $null
   } catch { $Readback = 'unreadable' }
   try {
-    $Cipher = (Get-Content -LiteralPath $CipherPath -Raw).Trim()
+    $Cipher = [IO.File]::ReadAllText($CipherPath, [Text.Encoding]::ASCII)
     $At = [Math]::Floor($Cipher.Length / 2)
     $Swap = if ($Cipher[$At] -eq 'A') { 'B' } else { 'A' }
     $Changed = $Cipher.Substring(0, $At) + $Swap + $Cipher.Substring($At + 1)
     $TamperPath = Join-Path $LocalRoot 'probe-key-copy.dpapi'
     [IO.File]::WriteAllText($TamperPath, $Changed, [Text.Encoding]::ASCII)
-    try { $null = Get-Content -LiteralPath $TamperPath -Raw | ConvertTo-SecureString; $Tamper = 'failed' }
+    try { $null = ConvertTo-SecureString -String ([IO.File]::ReadAllText($TamperPath, [Text.Encoding]::ASCII)); $Tamper = 'failed' }
     catch { $Tamper = 'ok' }
   } catch { $Tamper = 'failed' }
   Set-ProbeResult 'dpapi_readback' $Readback
@@ -252,7 +253,10 @@ Set-ProbeResult 'clipboard_cleared' $Cleared
 $Source = 'clipboard'
 if (-not $SecureWatched) { $SecureWatched = ConvertTo-SecureString $Dummy -AsPlainText -Force; $Source = 'generated' }
 $Save = 'yes'
-try { ConvertFrom-SecureString $SecureWatched | Set-Content -LiteralPath $CipherPath -Encoding ASCII }
+try {
+  $Cipher = ConvertFrom-SecureString -SecureString $SecureWatched
+  [IO.File]::WriteAllText($CipherPath, $Cipher, [Text.Encoding]::ASCII)
+}
 catch { $Save = 'no' }
 Set-ProbeResult 'dpapi_source' $Source
 Set-ProbeResult 'dpapi_save' $Save

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 } from "node:path";
 import test from "node:test";
@@ -36,6 +36,13 @@ function runPs(source, options = {}) {
   });
 }
 
+function spawnDiagnostic(result) {
+  const error = result.error
+    ? `${result.error.code || result.error.name || "spawn"}: ${result.error.message}`
+    : "none";
+  return `status=${result.status} signal=${result.signal || "none"} error=${error} stderr=${result.stderr || ""}`;
+}
+
 function psQuote(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
@@ -46,10 +53,35 @@ function scratch(label) {
 
 test("Windows PowerShell 5.1 parses every payload", { skip: SKIP }, () => {
   for (const name of readdirSync(PS_DIR).filter((entry) => entry.endsWith(".ps1"))) {
-    const source = readFileSync(join(PS_DIR, name), "utf8");
-    const parser = `$Source=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(source).toString("base64")}')); $Tokens=$null; $Errors=$null; [Management.Automation.Language.Parser]::ParseInput($Source,[ref]$Tokens,[ref]$Errors) | Out-Null; if ($Errors.Count -ne 0) { exit 2 }`;
+    const path = join(PS_DIR, name);
+    const parser = `$Utf8=New-Object Text.UTF8Encoding($false,$true); $Source=[IO.File]::ReadAllText(${psQuote(path)},$Utf8); $Tokens=$null; $Errors=$null; [Management.Automation.Language.Parser]::ParseInput($Source,${psQuote(path)},[ref]$Tokens,[ref]$Errors) | Out-Null; if ($Errors.Count -ne 0) { exit 2 }`;
     const result = runPs(parser);
-    assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+    assert.equal(result.status, 0, `${name}: ${spawnDiagnostic(result)}`);
+  }
+});
+
+test("session folder follows the helper path when cwd differs on Windows", { skip: SKIP }, async () => {
+  const dir = scratch("session-helper");
+  const other = scratch("session-other");
+  const copied = join(dir, "fb-probe.mjs");
+  try {
+    await cp(join(OUT, "fb-probe.mjs"), copied);
+    writeFileSync(join(dir, "REHEARSAL.marker"), "probe-sentence\n");
+    const stdout = execFileSync(process.execPath, [copied, "start"], {
+      cwd: other,
+      encoding: "utf8",
+      env: { ...process.env },
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+    });
+    assert.match(stdout, /^READY$/m);
+    assert.equal(existsSync(join(dir, "probe-results.txt")), true);
+    assert.equal(existsSync(join(other, "probe-results.txt")), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+    await rm(other, { recursive: true, force: true });
   }
 });
 
@@ -76,23 +108,27 @@ test("stub runs correct pin and reaches wrong-pin refusal", { skip: SKIP }, asyn
 test("DPAPI reads in a second process and rejects a tampered copy", { skip: SKIP }, async () => {
   const dir = scratch("dpapi");
   const cipher = join(dir, "value.dpapi");
-  const expected = join(dir, "expected.txt");
-  const result = join(dir, "result.txt");
+  const recovered = join(dir, "recovered.txt");
+  const reached = join(dir, "tamper-reached.txt");
   const parts = ["AbCdEfGhIjKlMnOpQrSt", "UvWxYz0123456789_-ab"];
   const plain = parts.join("");
-  const save = `$Plain=${psQuote(plain)}; $Secure=ConvertTo-SecureString $Plain -AsPlainText -Force; ConvertFrom-SecureString $Secure | Set-Content -LiteralPath ${psQuote(cipher)} -Encoding ASCII; $Hash=[Security.Cryptography.SHA256]::Create(); try { $Prefix=([BitConverter]::ToString($Hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($Plain)))).Replace('-','').Substring(0,8).ToLowerInvariant() } finally { $Hash.Dispose() }; [IO.File]::WriteAllText(${psQuote(expected)},$Prefix,[Text.Encoding]::ASCII)`;
-  assert.equal(runPs(save).status, 0);
-  const read = `$Expected=[IO.File]::ReadAllText(${psQuote(expected)}); $Secure=Get-Content -LiteralPath ${psQuote(cipher)} -Raw | ConvertTo-SecureString; $Ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure); try { $Plain=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($Ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Ptr) }; $Hash=[Security.Cryptography.SHA256]::Create(); try { $Prefix=([BitConverter]::ToString($Hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($Plain)))).Replace('-','').Substring(0,8).ToLowerInvariant() } finally { $Hash.Dispose() }; [IO.File]::WriteAllText(${psQuote(result)},$(if($Prefix -eq $Expected){'match'}else{'mismatch'}),[Text.Encoding]::ASCII)`;
-  assert.equal(runPs(read).status, 0);
-  assert.equal(readFileSync(result, "utf8"), "match");
+  const save = `$Ascii=New-Object Text.ASCIIEncoding; $Plain=${psQuote(plain)}; $Secure=ConvertTo-SecureString -String $Plain -AsPlainText -Force; $Cipher=ConvertFrom-SecureString -SecureString $Secure; [IO.File]::WriteAllText(${psQuote(cipher)},$Cipher,$Ascii)`;
+  const saved = runPs(save);
+  assert.equal(saved.status, 0, spawnDiagnostic(saved));
+  const read = `$Ascii=New-Object Text.ASCIIEncoding; $Cipher=[IO.File]::ReadAllText(${psQuote(cipher)},$Ascii); $Secure=ConvertTo-SecureString -String $Cipher; $Ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secure); try { $Plain=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($Ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Ptr) }; [IO.File]::WriteAllText(${psQuote(recovered)},$Plain,$Ascii)`;
+  const readBack = runPs(read);
+  assert.equal(readBack.status, 0, spawnDiagnostic(readBack));
+  assert.deepEqual(readFileSync(recovered), Buffer.from(plain, "ascii"));
 
   const text = readFileSync(cipher, "utf8").trim();
   const at = Math.floor(text.length / 2);
   const changed = text.slice(0, at) + (text[at] === "A" ? "B" : "A") + text.slice(at + 1);
   const tampered = join(dir, "tampered.dpapi");
   writeFileSync(tampered, changed, "ascii");
-  const check = `try { $null=Get-Content -LiteralPath ${psQuote(tampered)} -Raw | ConvertTo-SecureString; exit 3 } catch { exit 0 }`;
-  assert.equal(runPs(check).status, 0);
+  const check = `$Ascii=New-Object Text.ASCIIEncoding; [IO.File]::WriteAllText(${psQuote(reached)},'yes',$Ascii); try { $Cipher=[IO.File]::ReadAllText(${psQuote(tampered)},$Ascii); $null=ConvertTo-SecureString -String $Cipher; exit 3 } catch { exit 0 }`;
+  const rejected = runPs(check);
+  assert.equal(existsSync(reached), true);
+  assert.equal(rejected.status, 0, spawnDiagnostic(rejected));
   await rm(dir, { recursive: true, force: true });
 });
 
