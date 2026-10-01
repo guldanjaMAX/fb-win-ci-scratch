@@ -1,0 +1,70 @@
+# REVIEW DRAFT ONLY. Not installed or dispatched.
+# Future scratch path: .github/workflows/windows-s8-only.yml
+name: Windows S8 only
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s8-only-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  s8:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Require reviewed payload and Windows PowerShell 5.1 Desktop
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSEdition -ne 'Desktop') { throw 'Windows PowerShell 5.1 Desktop required' }
+          $expected = @{
+            'payload/l1/fb-store.mjs' = 'd30c7997d8bf17ae92402ef18641c0b82ab3e14b3ef8b83f240da7e456dc5b78'
+            'payload/l4/windows-store-pull.mjs' = '60f2f33f142a81f7df46b26ae21e22e3128706cd7042a020530f657a27d4bd9e'
+            'payload/s8-fix/store-action-pipes.test.mjs' = '12c87c56bafdb43c76996e3fdd7a41492486dd65c4b7fba9073368b0d5f6db00'
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            if ((Get-FileHash $entry.Key -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { throw "payload hash mismatch: $($entry.Key)" }
+          }
+      - name: Run pipe and existing S8 acceptance only
+        shell: powershell
+        env:
+          BRAIN_NO_WRANGLER_LOGIN: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:HELPER_PATH = (Resolve-Path '.\payload\l1\fb-store.mjs').Path
+          node --test .\payload\s8-fix\store-action-pipes.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'pipe acceptance failed' }
+          node .\payload\l4\windows-store-pull.mjs --helper .\payload\l1\fb-store.mjs --out .\ci-out\store-pull-results
+          if ($LASTEXITCODE -ne 0) { throw 'S8 acceptance failed' }
+      - name: Bound artifact storage
+        id: artifact_cap
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bytes = 0
+          if (Test-Path '.\ci-out\store-pull-results') {
+            $total = Get-ChildItem '.\ci-out\store-pull-results' -File -Recurse | Measure-Object -Property Length -Sum
+            $bytes = [long]$total.Sum
+          }
+          if ($bytes -gt 10485760) { throw 'Raw artifact exceeds approved 10 MiB cap; upload refused' }
+          'within_limit=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always() && steps.artifact_cap.outputs.within_limit == 'true'
+        with:
+          name: windows-s8-only-raw-results
+          path: ci-out/store-pull-results
+          if-no-files-found: warn
+          retention-days: 3
