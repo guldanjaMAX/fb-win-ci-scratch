@@ -9,7 +9,12 @@ const arms = readFileSync(join(root, "reference", "arms.mjs"), "utf8");
 
 test("real-window fixtures encode every triaged decision point non-vacuously", () => {
   assert.match(arms, /id: "A11b"[\s\S]*statuses: \[[^\]]*"W1 START readout"/u);
-  assert.match(arms, /id: "A12-review"[\s\S]*"manifest-edit": 1/u);
+  // W5 runs before the update and again after it (A0 parity), so a review arm that reaches W11 makes two edits.
+  assert.match(arms, /id: "A12-review"[\s\S]*"manifest-edit": 2/u);
+  assert.match(arms, /id: "A13"[\s\S]*"cli-version": 3/u);
+  assert.match(source, /PUBLISHED_KIT = \{ bytes: 6668013, sha256: "0555ad1972d7f8d6/u, "A16 downloads real published bytes so the full hash compare is reached");
+  assert.match(source, /PUBLISHED_KIT\.sha256\.slice\(0, 16\) \+ "f"\.repeat\(48\)/u);
+  assert.match(source, /id === "PR008"[^\n]*drive\(\), ready\(\), ready\(\), version\(\)/u, "PR008 health has stub output, so the bad machine file is the only fault");
   assert.match(source, /updatePendingMigration[\s\S]*applying 0049_fixture/u);
   assert.match(source, /updatePrompt[\s\S]*readStdin: true/u);
   assert.match(source, /id === "A7"[\s\S]*Your internet connection dropped[\s\S]*leakParts/u);

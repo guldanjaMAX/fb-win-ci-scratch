@@ -128,6 +128,8 @@ function w8Plan(id) {
     facts("google-discard", { discard: "yes" }), ...finish];
 }
 
+const PUBLISHED_KIT = { bytes: 6668013, sha256: "0555ad1972d7f8d6c1ded78a9fc4265f873cc4f4ce8c11fd04198cc5599409b2" };
+
 function planFor(id, processesPath) {
   const plan = { tier2: true, w8: false, history: false, cloud: false, sequence: [], decisions: {}, processes: [], processes_path: processesPath };
   if (["A11", "A11-empty", "A11-probe", "A11-window", "A11b-off", "A14"].includes(id)) {
@@ -138,7 +140,7 @@ function planFor(id, processesPath) {
   if (id === "A11b" || id.startsWith("A15-") || id === "PR002") {
     return { ...plan, tier2: false, w8: true, sequence: w8Plan(id) };
   }
-  if (id === "PR008") return { ...plan, badMachine: true, sequence: [nodeVersion(), version(), drive()] };
+  if (id === "PR008") return { ...plan, badMachine: true, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
   if (id === "A8") return { ...plan, rejoin: "verified", sequence: [nodeVersion(), version(), drive(), ready(), edit(), ready(), version()] };
   if (id === "A5") return { ...plan, rejoin: "dead", decisions: { "W7 update-retry": "stop" }, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
   if (id === "PR003") return { ...plan, history: true, twoCopies: true, sequence: commonPrefix().concat(successTail()) };
@@ -384,7 +386,14 @@ async function main() {
   sessionFacts.history_delete_proven = plan.history;
   const kit = Buffer.from("fixture kit bytes\n", "utf8");
   sessionFacts.kit_bytes = kit.length;
-  sessionFacts.kit_sha256 = plan.kitShaMismatch ? "f".repeat(64) : sha256(kit);
+  sessionFacts.kit_sha256 = sha256(kit);
+  if (plan.kitShaMismatch) {
+    // The URL must carry the expected hash prefix, so a mismatch is only reachable when the
+    // published bytes differ after the prefix. Use the real published kit with a changed tail:
+    // the helper downloads real bytes, the byte count matches, and the full hash compare refuses.
+    sessionFacts.kit_bytes = PUBLISHED_KIT.bytes;
+    sessionFacts.kit_sha256 = PUBLISHED_KIT.sha256.slice(0, 16) + "f".repeat(48);
+  }
   sessionFacts.kit_url = `https://financialbrain.ai/kit/brain-installer-0.4.9-${sessionFacts.kit_sha256.slice(0, 16)}.tgz`;
   sessionFacts.runtime_payload_sha256 = "0".repeat(64);
   writeJson(factsPath, sessionFacts);
