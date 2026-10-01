@@ -19,7 +19,8 @@ export const armSpecs = [
   { id: "A4", negative: true, point: "queued paused state classified", statuses: ["W7 STOP update queued", "W7 WAITING lead update-queued id=<id> words=deploy-recover,finish-later"], calls: { update: 1, deploy: 0 } },
   { id: "A4-deploy", negative: true, point: "deploy-recover decision consumed", statuses: ["W7 STOP update queued", "W7 WAITING lead update-queued id=<id> words=deploy-recover,finish-later", "W11 DONE done"], calls: { update: 1, deploy: 1 } },
   { id: "A4-later", negative: true, point: "finish-later decision consumed", statuses: ["W7 STOP update queued", "W7 WAITING lead update-queued id=<id> words=deploy-recover,finish-later", "W11 DONE done"], calls: { update: 1, deploy: 0 } },
-  { id: "A5", negative: true, point: "stale alive file classified dead", statuses: ["W7 WAITING lead update-retry id=<id> words=continue,stop"], calls: { update: 1 }, meta: { processReadsBeforeRerun: 1, exitAfterLogClose: true } },
+  { id: "A5", negative: true, point: "stale alive file classified dead after the entry process disappears", statuses: ["W7 WAITING lead update-retry id=<id> words=continue,stop"], calls: { update: 1 }, meta: { processReadsBeforeRerun: 1, exitAfterLogClose: true, rejoinCount: 1, updateProcessRemoved: true } },
+  { id: "A5-live", negative: true, point: "one rejoin followed by the update process exit decision", statuses: ["W7 INFO rejoin", "W7 WAITING lead update-retry id=<id> words=continue,stop"], calls: { update: 1 }, meta: { rejoinCount: 1, updateProcessRemoved: true } },
   { id: "A5-exit", negative: true, point: "unclassified exit observed", statuses: ["W7 STOP update failed"], calls: { update: 1 }, meta: { exitAfterLogClose: true } },
   { id: "A6", negative: true, point: "events anomaly yn-prompt", statuses: ["W7 STOP update failed"], calls: { update: 1 }, meta: { stdinTty: false, stdinEof: true, stdinBytes: 0 } },
   { id: "A6-hidden", negative: true, point: "hidden-token prompt anomaly", statuses: ["W7 STOP update failed"], calls: { update: 1 }, meta: { stdinTty: false, stdinEof: true, stdinBytes: 0 } },
@@ -57,7 +58,7 @@ export const armSpecs = [
   { id: "PR003", negative: true, point: "all observed clipboard candidates cleared and history absence proved", statuses: ["W3 INFO two-candidates", "W3 INFO history-deleted", "W3 PASS key-saved"], calls: { verify: 1 }, meta: { remainingHistoryMatches: 0 } },
   { id: "PR004", negative: true, point: "cross-class update retry ceiling reached", statuses: ["W7 INFO retry-cpu-reset", "W7 STOP update second-failure"], calls: { update: 2 }, meta: { totalAttempts: 2 } },
   { id: "PR005", negative: true, point: "load rechecked immediately before kit install", statuses: ["W6 SKIP load-running", "W11 DONE done"], calls: { "npm-cli.js": 0 }, meta: { processScanReached: true } },
-  { id: "PR006", negative: true, point: "startup-paused decision id reached deploy supervisor", statuses: ["W1 WAITING lead brain-paused id=<id> words=continue,deploy-recover,finish-later", "W3 PASS key-saved", "W11 DONE done"], calls: { deploy: 1 }, meta: { decisionIdForwarded: true } },
+  { id: "PR006", negative: true, point: "startup-paused decision id reached deploy supervisor", statuses: ["W1 WAITING lead brain-paused id=<id> words=deploy-recover,finish-later", "W3 PASS key-saved", "W7 INFO recovered", "W11 DONE done"], calls: { deploy: 1 }, meta: { decisionIdForwarded: true } },
   { id: "PR008", negative: true, point: "unexpected exception became newest parseable STOP", statuses: ["RUN STOP lead-stop unexpected-error"], calls: {}, meta: { helperBoundary: "RUN.STOP.lead-stop-unexpected-error" } }
 ];
 

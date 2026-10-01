@@ -1417,7 +1417,10 @@ function Start-FbW7 {
 }
 
 function Wait-FbW7Run {
-    param([Parameter(Mandatory=$true)][string]$RunId)
+    param(
+        [Parameter(Mandatory=$true)][string]$RunId,
+        [switch]$RejoinWait
+    )
     $folder = Join-Path (Join-Path $FB.Run 'steps') $RunId
     $eventsPath = Join-Path $folder 'events.txt'
     $exitPath = Join-Path $folder 'exit.txt'
@@ -1428,6 +1431,7 @@ function Wait-FbW7Run {
     $lastLineAt = [DateTime]::UtcNow
     $lastHeartbeat = [DateTime]::UtcNow
     $staleObservedAt = $null
+    $rejoinStartedAt = if ($RejoinWait) { [DateTime]::UtcNow } else { $null }
     $silenceReported = $false
     $pending = $false
     $agentWarning = $false
@@ -1480,13 +1484,25 @@ function Wait-FbW7Run {
             }
             throw 'bad update exit'
         }
+        $aliveFresh = $false
         if (Test-Path -LiteralPath $alivePath -PathType Leaf) {
-            if (((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $alivePath).LastWriteTimeUtc).TotalSeconds -gt 60) {
+            $aliveAge = ((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $alivePath).LastWriteTimeUtc).TotalSeconds
+            if ($aliveAge -le 60) { $aliveFresh = $true }
+            elseif (-not $RejoinWait) {
                 if ($null -eq $staleObservedAt) { $staleObservedAt = [DateTime]::UtcNow }
                 elseif (([DateTime]::UtcNow - $staleObservedAt).TotalSeconds -ge (Get-FbScaledSeconds 30)) {
                     return @{ Exit = 1; Class = 'dead'; Events = $events; Pending = $pending; AgentWarning = $agentWarning; YnPrompt = $ynPrompt }
                 }
             } else { $staleObservedAt = $null }
+        }
+        if ($RejoinWait) {
+            if ($aliveFresh) {
+                return @{ Exit = 1; Class = 'alive'; Events = $events; Pending = $pending; AgentWarning = $agentWarning; YnPrompt = $ynPrompt }
+            }
+            $rejoinLimit = ([DateTime]::UtcNow - $rejoinStartedAt).TotalSeconds -ge (Get-FbScaledSeconds 3600)
+            if ($rejoinLimit -or -not (Test-FbProcesses).Update) {
+                return @{ Exit = 1; Class = 'dead'; Events = $events; Pending = $pending; AgentWarning = $agentWarning; YnPrompt = $ynPrompt; RejoinLimit = $rejoinLimit }
+            }
         }
         $threshold = if ($stage -eq 5) { Get-FbScaledSeconds 1320 } else { Get-FbScaledSeconds 900 }
         if (-not $silenceReported -and (([DateTime]::UtcNow - $lastLineAt).TotalSeconds -ge $threshold)) {
@@ -1497,7 +1513,8 @@ function Wait-FbW7Run {
             Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'heartbeat'
             $lastHeartbeat = [DateTime]::UtcNow
         }
-        Start-Sleep -Seconds 2
+        $pollSeconds = if ($RejoinWait) { Get-FbScaledSeconds 10 } else { 2 }
+        Start-Sleep -Seconds $pollSeconds
     }
 }
 
@@ -1568,12 +1585,20 @@ function Complete-FbW7 {
             return 'stop'
         }
         if ($RunId -cne $FB.W7RunId) { $FB.W7RunId = $RunId }
+        $rejoinWritten = @{}
+        $rejoinWaiting = $false
         if ($FB.Rejoin -or $RunId -ceq $FB.RejoinRunId) {
             Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'rejoin'
+            $rejoinWritten[$RunId] = $true
         }
         while ($true) {
-            $result = Wait-FbW7Run -RunId $RunId
+            if ($rejoinWaiting) { $result = Wait-FbW7Run -RunId $RunId -RejoinWait }
+            else { $result = Wait-FbW7Run -RunId $RunId }
             if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
+            if ($result.Class -ceq 'alive') {
+                $rejoinWaiting = $false
+                continue
+            }
             if ($result.Pending) {
                 Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'pending-migration'
                 Set-FbProgress -Key 'w7_result' -Value 'stop'
@@ -1622,10 +1647,16 @@ function Complete-FbW7 {
                 if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
-            if ($result.Class -ceq 'dead' -and (Test-FbProcesses).Update) {
-                Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'rejoin'
+            $rejoinLimit = $result.ContainsKey('RejoinLimit') -and [bool]$result.RejoinLimit
+            if ($result.Class -ceq 'dead' -and -not $rejoinLimit -and (Test-FbProcesses).Update) {
+                if (-not $rejoinWritten.ContainsKey($RunId)) {
+                    Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'rejoin'
+                    $rejoinWritten[$RunId] = $true
+                }
+                $rejoinWaiting = $true
                 continue
             }
+            $rejoinWaiting = $false
             if (@('dead','update-busy','network') -ccontains $result.Class) {
                 $choice = Wait-FbDecision -Step 'W7' -Reason 'update-retry' -Words @('continue','stop')
                 if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }

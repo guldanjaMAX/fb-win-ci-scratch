@@ -12,7 +12,7 @@ const reasons = new Map([
   ["W4", new Set(["queue-zero", "pending", "projection", "queue", "wait-elapsed", "finish-later"])],
   ["W5", new Set(["drive-not-terminal"])],
   ["W6", new Set(["sha", "load-running", "payload-proven"])],
-  ["W7", new Set(["start", "stage", "rejoin", "retry-cpu-reset", "retry-last-stage-503", "verified", "pending-migration-seen", "queue-not-empty", "update-retry", "update-queued", "queued", "failed", "second-failure", "pending-migration"])],
+  ["W7", new Set(["start", "stage", "rejoin", "recovered", "retry-cpu-reset", "retry-last-stage-503", "verified", "pending-migration-seen", "queue-not-empty", "update-retry", "update-queued", "queued", "failed", "second-failure", "pending-migration"])],
   ["W8", new Set(["check-start", "calendar-ok", "reconnect-needed", "connected", "scopes-all", "scope-missing-drive", "scope-missing-gmail", "scope-missing-calendar", "account-changed", "account-same", "account-unknown", "restored", "kept", "sac-refused", "google-partial", "google-account", "google-consent", "off", "google-busy", "google-none", "consent-not-finished", "check-failed", "connect-failed"])],
   ["W11", new Set(["key-removed", "done"])]
 ]);
@@ -105,6 +105,7 @@ export function verifyArm(result) {
   if (Object.values(result.leak_scan_counts || {}).some((count) => count !== 0)) errors.push("leak scan nonzero");
   if (["A6", "A6-hidden"].includes(result.arm) && (result.meta.stdinTty !== false || result.meta.stdinEof !== true || result.meta.stdinBytes !== 0)) errors.push("stdin contract failed");
   if (result.arm === "A7" && Object.values(result.meta.rawHits || {}).some((count) => count < 1)) errors.push("raw canary control failed");
+  if (["A5", "A5-live"].includes(result.arm) && (result.meta.rejoinCount !== 1 || result.meta.updateProcessRemoved !== true)) errors.push("bounded rejoin control failed");
   if (result.arm === "A13" && result.meta.controlFalsePositive) errors.push("migration control false positive");
   if (["A11", "A11-empty", "A11-probe"].includes(result.arm) && result.meta.windowOpened !== false) errors.push("tier gate opened window");
   if (result.arm === "A14" && (result.meta.keyRead || !result.meta.plantedDailyCaught)) errors.push("daily action key-read control failed");

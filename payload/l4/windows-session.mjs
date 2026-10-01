@@ -118,7 +118,8 @@ function w8Plan(id) {
   if (id === "PR002") {
     return [...boot, lease, pre, calendarReconnect, secondLease, backup,
       raw("google-connect", "connected. Token stored in fixture", { delay_ms: 5000 }),
-      facts("google-restore", { restore: "done" }), ...finish];
+      facts("google-restore", { restore: "done" }),
+      facts("google-discard", { discard: "yes" }), ...finish];
   }
   if (id === "A15-partial") {
     return [...boot, lease, pre, calendarReconnect, secondLease, backup, connected,
@@ -149,7 +150,8 @@ function planFor(id, processesPath) {
   }
   if (id === "PR008") return { ...plan, badMachine: true, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
   if (id === "A8") return { ...plan, rejoin: "verified", sequence: [nodeVersion(), version(), drive(), ready(), edit(), ready(), version()] };
-  if (id === "A5") return { ...plan, rejoin: "dead", decisions: { "W7 update-retry": "stop" }, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
+  if (id === "A5") return { ...plan, rejoin: "dead", dropUpdateBeforeDead: true, decisions: { "W7 update-retry": "stop" }, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
+  if (id === "A5-live") return { ...plan, rejoin: "dead", processExitAfterRejoinMs: 30_000, decisions: { "W7 update-retry": "stop" }, sequence: [nodeVersion(), version(), drive(), ready(), ready(), version()] };
   if (id === "PR003") return { ...plan, history: true, twoCopies: true, sequence: commonPrefix().concat(successTail()) };
   if (id === "PR006") return { ...plan, decisions: { "W1 brain-paused": "deploy-recover" }, sequence: [nodeVersion(), version(), drive(), raw("health", "this Brain is paused for an update and cannot accept documents.", { exit: 1 }), keyOk(), raw("deploy", 'deployed "recovery"'), ready(), version()] };
   if (id === "A1") return { ...plan, decisions: { "W4 queue": "finish-later" }, sequence: commonPrefix({ health: pending() }).concat([ready(), version()]) };
@@ -411,10 +413,11 @@ function writeWindowDpapiKey(localRoot, key) {
     "$plain=[Console]::In.ReadToEnd()",
     "$secure=ConvertTo-SecureString $plain -AsPlainText -Force",
     "$protected=ConvertFrom-SecureString $secure",
-    "[IO.File]::WriteAllText($args[0],($protected+[char]10),(New-Object Text.UTF8Encoding($false)))",
+    "[IO.File]::WriteAllText($env:FB_FIXTURE_DPAPI_PATH,($protected+[char]10),(New-Object Text.UTF8Encoding($false)))",
     "$secure.Dispose()",
   ].join(";");
-  const result = runQuiet("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, target], { input: key });
+  const env = { ...process.env, FB_FIXTURE_DPAPI_PATH: target };
+  const result = runQuiet("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { input: key, env });
   if (result.status !== 0 || !existsSync(target)) throw new Error("fixture key protection failed");
   return target;
 }
@@ -528,6 +531,8 @@ async function driveWindow({ child, session, plan, key, desktop }) {
   let loadInjected = false;
   let desktopInjected = false;
   let badKeyCount = 0;
+  let rejoinObservedAt = null;
+  let updateProcessRemoved = false;
   const deadline = Date.now() + 120_000;
   const closed = new Promise((resolveClose) => child.once("close", resolveClose));
   while (child.exitCode === null && Date.now() < deadline) {
@@ -536,6 +541,13 @@ async function driveWindow({ child, session, plan, key, desktop }) {
       if (!desktopInjected && / W1 INFO memory-ok$/u.test(line)) {
         writeFileSync(join(session, "run", "desktop-dir.txt"), `${desktop}\n`, "utf8");
         desktopInjected = true;
+      }
+      if (plan.dropUpdateBeforeDead && !updateProcessRemoved && / W1 INFO update-running$/u.test(line)) {
+        writeJson(plan.processes_path, []);
+        updateProcessRemoved = true;
+      }
+      if (plan.processExitAfterRejoinMs && rejoinObservedAt === null && / W7 INFO rejoin$/u.test(line)) {
+        rejoinObservedAt = Date.now();
       }
       if (plan.twoCopies && !clipboardAdvanced && / W3 INFO two-candidates$/u.test(line)) {
         writeFileSync(join(session, "test-clipboard.txt"), `${key}\n`, "utf8");
@@ -562,11 +574,15 @@ async function driveWindow({ child, session, plan, key, desktop }) {
         if (choice && !decided.has(waiting[3]) && helperDecision(session, choice)) decided.add(waiting[3]);
       }
     }
+    if (plan.processExitAfterRejoinMs && rejoinObservedAt !== null && !updateProcessRemoved && Date.now() - rejoinObservedAt >= plan.processExitAfterRejoinMs) {
+      writeJson(plan.processes_path, []);
+      updateProcessRemoved = true;
+    }
     await wait(100);
   }
   if (child.exitCode === null) child.kill();
   await closed;
-  return { timedOut: Date.now() >= deadline, decisions: decided.size };
+  return { timedOut: Date.now() >= deadline, decisions: decided.size, updateProcessRemoved };
 }
 
 function initializeSpecialFixture(args, root, { realNode = false } = {}) {
@@ -1084,8 +1100,10 @@ async function main() {
   let windowSha = args.expectedWindowSha256;
   if (args.arm === "PR002") {
     const text = readFileSync(windowPath, "utf8");
-    const scaled = text.replace("[DateTime]::UtcNow.AddMinutes(8)", "[DateTime]::UtcNow.AddSeconds(1)");
-    if (scaled === text) throw new Error("PR002 time seam not reached");
+    const scaled = text
+      .replace("[DateTime]::UtcNow.AddMinutes(8)", "[DateTime]::UtcNow.AddSeconds(1)")
+      .replace("Invoke-FbW8Step -Name google-connect -TimeoutSec 420", "Invoke-FbW8Step -Name google-connect -TimeoutSec 1");
+    if (scaled === text || !scaled.includes("Invoke-FbW8Step -Name google-connect -TimeoutSec 1")) throw new Error("PR002 time seam not reached");
     windowPath = join(fixture.session, "finish-window-time-seam.txt");
     writeFileSync(windowPath, scaled, "utf8");
     windowSha = sha256(Buffer.from(scaled));
@@ -1103,7 +1121,7 @@ async function main() {
     BRAIN_NO_WRANGLER_LOGIN: "1",
     BRAIN_GOOGLE_TOKEN_STORE: "file",
     FB_WINDOW_TEST: "1",
-    FB_TEST_TIME_SCALE: "0.001",
+    FB_TEST_TIME_SCALE: args.arm === "A5-live" ? "0.01" : "0.001",
     FB_TEST_HEARTBEAT_MS: "20",
     FB_TEST_STALE_MS: "80",
     FB_TEST_START_POLL_MS: "5",
@@ -1192,6 +1210,8 @@ async function main() {
       dailyCount: (helperSource.match(/Daily/gu) || []).length,
       keyRead: /read.*key/iu.test(helperSource.match(/New-ScheduledTaskAction[^\n]*/u)?.[0] || ""),
       plantedDailyCaught: args.arm === "A14" && registrationSites > 0,
+      rejoinCount: actualStatus.filter((line) => / W7 INFO rejoin$/u.test(line)).length,
+      updateProcessRemoved: driven.updateProcessRemoved,
     },
   };
   process.stdout.write(`${JSON.stringify(result)}\n`);
