@@ -57,10 +57,12 @@ function closedEnvironment(overrides = {}) {
 }
 
 function runPowerShell(source) {
-  return spawnSync(powerShellPath(), [
+  const executable = powerShellPath();
+  const args = [
     "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
     Buffer.from(source, "utf16le").toString("base64"),
-  ], {
+  ];
+  const result = spawnSync(executable, args, {
     encoding: "utf8",
     env: closedEnvironment(),
     windowsHide: true,
@@ -68,13 +70,23 @@ function runPowerShell(source) {
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 60_000,
   });
+  result.commandArgv = [executable, ...args];
+  return result;
 }
 
 function quotePowerShell(value) {
   return String(value).replaceAll("'", "''");
 }
 
-function unregisterTask() {
+function firstFiveLines(value) {
+  const text = String(value ?? "").replaceAll("\r\n", "\n");
+  if (!text) return [];
+  const lines = text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines.slice(0, 5);
+}
+
+function unregisterTask(evidence = [], phase = "cleanup") {
   const result = runPowerShell(String.raw`$ErrorActionPreference = 'Stop'
 $Task = Get-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
 if ($null -ne $Task) {
@@ -95,7 +107,17 @@ do {
   Start-Sleep -Milliseconds 200
 } while ([DateTime]::UtcNow -lt $RemoveDeadline)
 if ($null -ne $Remaining) { throw 'task remained registered' }
+exit 0
 `);
+  evidence.push({
+    phase,
+    command_argv: result.commandArgv,
+    status: result.status,
+    signal: result.signal ?? null,
+    error: result.error?.code ?? null,
+    stdout_first_5: firstFiveLines(result.stdout),
+    stderr_first_5: firstFiveLines(result.stderr),
+  });
   assert.equal(result.status, 0, `task-cleanup-failed status=${result.status} signal=${result.signal ?? "none"} error=${result.error?.code ?? "none"}`);
 }
 
@@ -250,10 +272,10 @@ function assertNoCredentialMaterial(text) {
     "credential-material-present");
 }
 
-function runRegistrationArm(helper, root) {
+function runRegistrationArm(helper, root, cleanup) {
   const fixture = makeFixture(join(root, "registration"), helper);
   writeFileSync(join(fixture.session, "run", "status.txt"), "2026-10-01T15:00:00Z W11 DONE done\n", "ascii");
-  unregisterTask();
+  unregisterTask(cleanup, "before-arm");
   const first = runHelper(fixture, "schedule-store-pull");
   assert.equal(first.status, 0, "registration-command-failed");
   assert.equal(first.stdout, `${SUCCESS}\n`, "registration-output-wrong");
@@ -309,10 +331,10 @@ function runRegistrationArm(helper, root) {
   return "registered-read-started-replaced-removed";
 }
 
-function runManifestRefusalArm(helper, root) {
+function runManifestRefusalArm(helper, root, cleanup) {
   const fixture = makeFixture(join(root, "manifest-refusal"), helper, { customApi: false });
   writeFileSync(join(fixture.session, "run", "status.txt"), "2026-10-01T15:00:00Z W11 DONE done\n", "ascii");
-  unregisterTask();
+  unregisterTask(cleanup, "before-arm");
   const result = runHelper(fixture, "schedule-store-pull");
   assert.notEqual(result.status, 0, "manifest-refusal-exit-zero");
   assert.equal(result.stdout, "This install does not have store data set up.\n", "manifest-refusal-output-wrong");
@@ -322,7 +344,7 @@ function runManifestRefusalArm(helper, root) {
   return "custom-api-decision-reached-no-task";
 }
 
-function runLiveWindowArm(helper, root) {
+function runLiveWindowArm(helper, root, cleanup) {
   const fixture = makeFixture(join(root, "live-window"), helper);
   const live = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
     cwd: fixture.session,
@@ -346,7 +368,7 @@ function runLiveWindowArm(helper, root) {
       "2026-10-01T14:00:00Z RUN START start",
       "",
     ].join("\n"), "ascii");
-    unregisterTask();
+    unregisterTask(cleanup, "before-arm");
     const result = runHelper(fixture, "schedule-store-pull");
     assert.notEqual(result.status, 0, "live-window-refusal-exit-zero");
     assert.equal(result.stdout, "The update window is still working.\n", "live-window-refusal-output-wrong");
@@ -361,15 +383,15 @@ function runLiveWindowArm(helper, root) {
   }
 }
 
-function runArm(id, helper, root) {
-  if (id === "S8-REG") return runRegistrationArm(helper, root);
-  if (id === "S8-REFUSE") return runManifestRefusalArm(helper, root);
-  if (id === "S8-LIVE-WINDOW") return runLiveWindowArm(helper, root);
+function runArm(id, helper, root, cleanup) {
+  if (id === "S8-REG") return runRegistrationArm(helper, root, cleanup);
+  if (id === "S8-REFUSE") return runManifestRefusalArm(helper, root, cleanup);
+  if (id === "S8-LIVE-WINDOW") return runLiveWindowArm(helper, root, cleanup);
   throw new Error("unknown-arm");
 }
 
-function safeResult(id, status, reason) {
-  return { id, status, reason };
+function safeResult(id, status, reason, cleanup = []) {
+  return { id, status, reason, cleanup };
 }
 
 function main() {
@@ -382,22 +404,25 @@ function main() {
   let controlPassed = false;
   try {
     for (const id of ARMS) {
+      const cleanup = [];
       if (id !== "S8-REG" && !controlPassed) {
-        results.push(safeResult(id, "VOID", "control-failed"));
+        results.push(safeResult(id, "VOID", "control-failed", cleanup));
         continue;
       }
+      let result;
       try {
-        const reason = runArm(id, args.helper, scratch);
-        results.push(safeResult(id, "PASS", reason));
+        const reason = runArm(id, args.helper, scratch, cleanup);
+        result = safeResult(id, "PASS", reason, cleanup);
         if (id === "S8-REG") controlPassed = true;
       } catch (error) {
-        results.push(safeResult(id, "FAIL", String(error?.message ?? "arm-failed").replace(/[^A-Za-z0-9_.-]/gu, "-").slice(0, 120)));
+        result = safeResult(id, "FAIL", String(error?.message ?? "arm-failed").replace(/[^A-Za-z0-9_.-]/gu, "-").slice(0, 120), cleanup);
       } finally {
-        try { unregisterTask(); } catch { /* the result already records the arm failure */ }
+        try { unregisterTask(cleanup, "after-arm"); } catch { /* cleanup evidence records the failure */ }
       }
+      results.push(result);
     }
   } finally {
-    try { unregisterTask(); } catch { /* final best effort */ }
+    try { unregisterTask([], "final"); } catch { /* final best effort */ }
     rmSync(scratch, { recursive: true, force: true });
   }
   writeFileSync(join(args.out, "store-pull-results.json"), `${JSON.stringify(results, null, 2)}\n`, "utf8");

@@ -77,7 +77,9 @@ check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.
 check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
 check(["R-NPM", "R-NPM-FOREIGN", "R-REG", "R-REG-control", "R-CLOSE"].every((id) => armSpecs.some((arm) => arm.id === id)), "five real-path Windows arms are registered");
 check(windowsStorePullSource.includes('"..", "l1", "fb-store.mjs"') && !windowsStorePullSource.includes('join(session, "fb-win.mjs")'), "store pull Windows arms target payload/l1/fb-store.mjs instead of the main helper");
-check(windowsStorePullSource.includes("Stop-ScheduledTask") && windowsStorePullSource.includes("$StopDeadline") && windowsStorePullSource.includes("$RemoveDeadline") && windowsStorePullSource.includes("task remained registered"), "store harness cleanup waits for stop and proves removal by readback");
+check(windowsStorePullSource.includes("Stop-ScheduledTask") && windowsStorePullSource.includes("$StopDeadline") && windowsStorePullSource.includes("$RemoveDeadline") && windowsStorePullSource.includes("task remained registered") && windowsStorePullSource.includes("exit 0") && windowsStorePullSource.includes("command_argv") && windowsStorePullSource.includes("stdout_first_5") && windowsStorePullSource.includes("stderr_first_5"), "store harness cleanup waits for stop, proves absence, forces a successful absent-task exit, and records diagnostics");
+const registrySpec = armSpecs.find((arm) => arm.id === "R-REG");
+check(windowsSessionSource.includes("assertRegistryArmState(snapshot, mode)") && windowsSessionSource.includes("const target = spec.statuses.at(-1)") && registrySpec.statuses.includes("W3 SKIP history-unproven") && registrySpec.statuses.includes("W11 DONE done"), "R-REG verifies its injected registry state and waits through the non-vacuous branch decision");
 const npmOwnedControl = simulateArm("R-NPM");
 const foreignNpmControl = simulateArm("R-NPM-FOREIGN");
 const missedForeignRefusal = structuredClone(foreignNpmControl);

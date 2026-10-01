@@ -385,6 +385,17 @@ function applyRegistryArm(snapshot, mode) {
   }
 }
 
+function assertRegistryArmState(snapshot, mode) {
+  const history = snapshot.keys.find((item) => item.name === "history").key.replace(/^HKCU\\/u, "HKCU:\\");
+  const policy = snapshot.keys.find((item) => item.name === "policy").key.replace(/^HKLM\\/u, "HKLM:\\");
+  const expected = mode === "history-on" ? 1 : 0;
+  const script = mode === "history-on"
+    ? `$History = (Get-ItemProperty -LiteralPath '${history}' -ErrorAction Stop).EnableClipboardHistory\n$Policy = Get-ItemProperty -LiteralPath '${policy}' -ErrorAction Stop\nif ([int]$History -ne ${expected} -or $null -ne $Policy.AllowClipboardHistory) { exit 1 }\nexit 0`
+    : `$History = (Get-ItemProperty -LiteralPath '${history}' -ErrorAction Stop).EnableClipboardHistory\nif ([int]$History -ne ${expected} -or (Test-Path -LiteralPath '${policy}')) { exit 1 }\nexit 0`;
+  const result = runQuiet("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script]);
+  if (result.status !== 0) throw new Error("registry arm state verification failed");
+}
+
 function restoreRegistry(snapshot) {
   for (const item of snapshot.keys) registryDelete(item.key);
   for (const item of snapshot.keys) {
@@ -623,10 +634,11 @@ async function runRegistryArm(args, spec) {
   let receipt = null;
   try {
     applyRegistryArm(snapshot, mode);
+    assertRegistryArmState(snapshot, mode);
     child = launchWindowBridge({ args, fixture, root, env, testMode: "off" });
     child.stdout.resume();
     child.stderr.resume();
-    const target = spec.statuses[0];
+    const target = spec.statuses.at(-1);
     await waitUntil(() => {
       actualStatus = lines(join(fixture.run, "status.txt"));
       return actualStatus.some((line) => canonical(line) === target);
