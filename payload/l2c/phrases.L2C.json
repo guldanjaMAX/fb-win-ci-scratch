@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "kit_commit": "67e9693132b18c8070bc557ac83d61bbaf612970",
+  "entries": [
+    {
+      "id": "w8-calendar-ok",
+      "steps": ["google-calendar-check"],
+      "kind": "class",
+      "value": "ok",
+      "outcome": "success",
+      "match": "dry run:",
+      "source": "brain.mjs:13581",
+      "priority": 10
+    },
+    {
+      "id": "w8-reconnect-cli-token",
+      "steps": ["google-calendar-check"],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "connectors/google-auth.mjs:1562",
+      "priority": 100
+    },
+    {
+      "id": "w8-reconnect-calendar-warn",
+      "steps": ["google-calendar-check"],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "brain.mjs:13573",
+      "priority": 100
+    },
+    {
+      "id": "w8-reconnect-calendar-refusal",
+      "steps": ["google-calendar-check"],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "brain.mjs:13594",
+      "priority": 100
+    },
+    {
+      "id": "w8-reconnect-missing-scope",
+      "steps": ["google-calendar-check"],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "brain.mjs:19260",
+      "priority": 100
+    },
+    {
+      "id": "w8-check-failed",
+      "steps": ["google-calendar-check"],
+      "kind": "class",
+      "value": "check-failed",
+      "outcome": "failure",
+      "match": "Fix the calendar errors printed above",
+      "source": "brain.mjs:13595",
+      "priority": 20
+    },
+    {
+      "id": "w8-google-busy",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "google-busy",
+      "outcome": "failure",
+      "match": "ingest is already running on this computer.",
+      "source": "operations/source-ingest-lock.mjs:275",
+      "priority": 100
+    },
+    {
+      "id": "w8-google-none",
+      "steps": ["google-calendar-check"],
+      "kind": "class",
+      "value": "google-none",
+      "outcome": "failure",
+      "match": "no Google connection on this machine",
+      "source": "brain.mjs:19255",
+      "priority": 90
+    },
+    {
+      "id": "w8-sac",
+      "steps": ["google-calendar-check", "google-connect"],
+      "kind": "class",
+      "value": "sac",
+      "outcome": "failure",
+      "match": "Smart App Control",
+      "source": "operations/windows-dpapi-session.mjs:46",
+      "priority": 95
+    },
+    {
+      "id": "w8-connected",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "connected",
+      "outcome": "success",
+      "match": "connected. Token stored in",
+      "source": "brain.mjs:18480",
+      "priority": 10
+    },
+    {
+      "id": "w8-client-id-wall",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "client-id-wall",
+      "outcome": "failure",
+      "match": "GOOGLE_CLIENT_ID is not set.",
+      "source": "brain.mjs:18426",
+      "priority": 90
+    },
+    {
+      "id": "w8-consent-cancelled",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "Google returned",
+      "source": "connectors/google-auth.mjs:195",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-state",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "state mismatch",
+      "source": "connectors/google-auth.mjs:202",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-port",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "is already in use, so the sign-in cannot complete",
+      "source": "connectors/google-auth.mjs:219",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-timeout",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "timed out waiting for the browser to complete sign-in",
+      "source": "connectors/google-auth.mjs:236",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-no-refresh",
+      "steps": ["google-connect"],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "Google did not return a refresh token.",
+      "source": "connectors/google-auth.mjs:262",
+      "priority": 80
+    }
+  ]
+}

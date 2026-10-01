@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "kit_commit": "67e9693132b18c8070bc557ac83d61bbaf612970",
+  "minimum": 65,
+  "entries": [
+    {"id":"version","fragments":["console.log(PRODUCT_VERSION)"],"kind":"ok","file":"brain.mjs","lines":[29850,29853],"used_by":"stub"},
+    {"id":"update-start","fragments":["Updating your Brain from "," to ",". For part of this your Brain won't accept new documents; asking questions keeps working. Keep this window open."],"kind":"info","file":"brain.mjs","line":6251,"used_by":"both"},
+    {"id":"bookmark","fragments":["required D1 restore bookmark captured"],"kind":"ok","file":"brain.mjs","line":6229,"used_by":"both"},
+    {"id":"safety-pause-1","fragments":["-minute safety pause elapsed, but nothing proved older writers had stopped."],"kind":"warn","file":"brain.mjs","line":5341,"used_by":"both"},
+    {"id":"safety-pause-2","fragments":["the safety pause elapsed but quiescence was NOT verified (","."],"kind":"warn","file":"brain.mjs","line":6362,"used_by":"both"},
+    {"id":"safety-pause-3","fragments":["continuing to the migration with an unverified writer state; if it fails, treat an unconfirmed vector batch as the first suspect."],"kind":"warn","file":"brain.mjs","line":6363,"used_by":"both"},
+    {"id":"schema-ok","fragments":["schema up to date ("," migration(s) applied)"],"kind":"ok","file":"brain.mjs","line":4616,"used_by":"both"},
+    {"id":"migration-pending","fragments":["applying "],"kind":"info","file":"brain.mjs","line":4688,"used_by":"both"},
+    {"id":"migration-applied","fragments":["applied "],"kind":"ok","file":"brain.mjs","line":4699,"used_by":"stub"},
+    {"id":"stage-names","fragments":["paused vector-drain deployment","paused vector-drain health verification","vector-drain quiescence","migration","accelerated legacy vector bootstrap","active vector-drain deployment","active vector-drain health verification","deployment","provider-secret reconciliation","vector projection convergence","exact-version health verification","full acceptance test","D1 version commit","D1 version readback","verified history commit"],"kind":"die","file":"brain.mjs","lines":[6280,6455],"used_by":"stub"},
+    {"id":"deployed","fragments":["deployed \""],"kind":"ok","file":"brain.mjs","line":2800,"used_by":"both"},
+    {"id":"safety-pause-wait","fragments":["safety pause: waiting "," minutes for older database writers to finish"],"kind":"info","file":"brain.mjs","line":5345,"used_by":"both"},
+    {"id":"safety-pause-check","fragments":["safety pause: checking that older database writers have finished (up to "," minutes)"],"kind":"info","file":"brain.mjs","line":5359,"used_by":"both"},
+    {"id":"convergence-ready","fragments":["vector index is query-ready (","; "," newly confirmed this run)"],"kind":"ok","file":"brain.mjs","line":24412,"used_by":"both"},
+    {"id":"convergence-live","fragments":["the vector index is query-ready: semantic search is live now"],"kind":"ok","file":"brain.mjs","line":23722,"used_by":"window"},
+    {"id":"acceptance","fragments":["acceptance suite against "],"kind":"info","file":"brain.mjs","line":6802,"used_by":"both"},
+    {"id":"support-code","fragments":["  Need help with this? Run: brain support --explain "],"kind":"die","file":"brain.mjs","line":617,"used_by":"window"},
+    {"id":"stage-failed","fragments":["update stopped during ",": ","D1 recovery bookmark: "],"kind":"die","file":"brain.mjs","lines":[6476,6482],"used_by":"both"},
+    {"id":"owner-partway","fragments":["The update stopped partway. Your Brain can still answer questions but won't take new documents until the update finishes. Nothing was lost. Run brain update once more."],"kind":"die","file":"brain.mjs","line":6474,"used_by":"both"},
+    {"id":"owner-before-check","fragments":["The update stopped before its last check. Your Brain is working normally and nothing was lost. Run brain update once more; it picks up where it stopped."],"kind":"die","file":"brain.mjs","line":6475,"used_by":"stub"},
+    {"id":"paused","fragments":["THIS BRAIN CANNOT ACCEPT DOCUMENTS RIGHT NOW."],"kind":"die","file":"brain.mjs","line":6487,"used_by":"both"},
+    {"id":"verified","fragments":["upgrade verified, now at "],"kind":"ok","file":"brain.mjs","line":6499,"used_by":"both"},
+    {"id":"done","fragments":["Done. Your Brain is now on version "," and passed its checks."],"kind":"ok","file":"brain.mjs","line":28378,"used_by":"both"},
+    {"id":"queue-initial","fragments":["Your Brain is still indexing "," recent items so they can be found by meaning. ","Updating now would interrupt that, so nothing was changed. You can keep using your Brain. ","Run brain update again later."],"kind":"die","file":"brain.mjs","lines":[23628,23630],"used_by":"both"},
+    {"id":"queue-before-pause","fragments":["This Brain "," queued search update(s) before the paused deployment. ","The paused deployment was not started. Wait until `brain health` says query-ready, then run the update again."],"kind":"die","file":"brain.mjs","lines":[23636,23638],"used_by":"stub"},
+    {"id":"cpu-reset","fragments":["D1 DB exceeded its CPU time limit and was reset","CPU time limit|\\bwas reset\\b"],"kind":"die","file":"brain.mjs","lines":[23164,23170],"used_by":"both"},
+    {"id":"last-stage-503","fragments":["brain corpus writes are paused for a verified upgrade or rollback"],"kind":"worker","file":"worker/src/index.js","line":2666,"used_by":"both"},
+    {"id":"health-agree","fragments":["/health and authenticated inventory agree on ","/"],"kind":"ok","file":"brain.mjs","line":3878,"used_by":"both"},
+    {"id":"health-ready","fragments":["vector index is query-ready ("," confirmed vector(s))"],"kind":"ok","file":"brain.mjs","line":3987,"used_by":"both"},
+    {"id":"health-pending-old","fragments":[" are still processing"],"kind":"die","file":"brain.mjs","line":3943,"used_by":"stub"},
+    {"id":"health-pending","fragments":[" are not query-visible yet"],"kind":"die","file":"brain.mjs","line":3959,"used_by":"stub"},
+    {"id":"health-paused","fragments":["this Brain is paused for an update and cannot accept documents."],"kind":"die","file":"brain.mjs","lines":[3872,3874],"used_by":"both"},
+    {"id":"status-version","fragments":["  product version ","product_version"],"kind":"info","file":"brain.mjs","line":4933,"used_by":"stub"},
+    {"id":"status-migrations","fragments":["migrations: "," applied, "," pending"],"kind":"info","file":"brain.mjs","line":4959,"used_by":"stub"},
+    {"id":"verify-ok","fragments":["Cloudflare access confirmed for account \"","\" ("],"kind":"ok","file":"brain.mjs","line":1721,"used_by":"both"},
+    {"id":"verify-date","fragments":["Cloudflare did not accept "," (code 9109)."],"kind":"die","file":"brain.mjs","line":22769,"used_by":"window"},
+    {"id":"verify-rejected","fragments":["Cloudflare refused the credential: "],"kind":"die","file":"brain.mjs","line":22779,"used_by":"window"},
+    {"id":"verify-no-account","fragments":["this Cloudflare approval cannot see any account."],"kind":"die","file":"brain.mjs","line":1649,"used_by":"window"},
+    {"id":"verify-wrong-account","fragments":["the manifest declares account ",", but this Cloudflare approval can only see:"],"kind":"die","file":"brain.mjs","lines":[1656,1657],"used_by":"window"},
+    {"id":"network-drop","fragments":["Your internet connection dropped while talking to Cloudflare."],"kind":"die","file":"brain.mjs","line":22744,"used_by":"window"},
+    {"id":"cf-failed","fragments":[" failed (","): "],"kind":"die","file":"brain.mjs","line":1532,"used_by":"both"},
+    {"id":"sac-refused","fragments":["Windows refused to run the temporary DPAPI helper, even after compiling a fresh copy. ","This is most likely Smart App Control blocking the unsigned helper. ","Nothing was changed; re-running the command usually works."],"kind":"die","file":"operations/windows-dpapi-session.mjs","lines":[44,47],"used_by":"both"},
+    {"id":"yn-recovery","fragments":["Use recovery API-token access now? (y/n)"],"kind":"prompt","file":"brain.mjs","lines":[1354,1360],"used_by":"both"},
+    {"id":"yn-saved","fragments":["Use this saved credential now? (y/n)"],"kind":"prompt","file":"brain.mjs","line":965,"used_by":"stub"},
+    {"id":"yn-hidden","fragments":["Enter a newly created scoped API token in the hidden prompt now? (y/n)"],"kind":"prompt","file":"brain.mjs","line":1003,"used_by":"both"},
+    {"id":"google-lease-wait","fragments":["another Google source or connection is active; Calendar will wait for that credential-safe boundary instead of skipping this refresh"],"kind":"info","file":"brain.mjs","line":13499,"used_by":"window"},
+    {"id":"google-dead-token","fragments":["Reconnect with ","brain connect google --scopes drive,gmail,calendar"," before running this again."],"kind":"warn","file":"brain.mjs","lines":[13572,13574],"used_by":"window"},
+    {"id":"google-preview-incomplete","fragments":["Calendar preview incomplete: ","Reconnect with `brain connect google --scopes drive,gmail,calendar`, then retry the preview."],"kind":"die","file":"brain.mjs","lines":[13582,13594],"used_by":"both"},
+    {"id":"google-fix-calendar","fragments":["Fix the calendar errors printed above, then retry the preview."],"kind":"die","file":"brain.mjs","line":13595,"used_by":"both"},
+    {"id":"google-dry-run-ok","fragments":["dry run: "," event(s) would be sent, "," cancellation(s) would be removed"],"kind":"ok","file":"brain.mjs","lines":[13581,13583],"used_by":"both"},
+    {"id":"google-scope-missing","fragments":["the stored Google connection does not include the \"","\" scope (it has: ","Reconnect with: brain connect google --scopes "],"kind":"die","file":"brain.mjs","lines":[19258,19260],"used_by":"both"},
+    {"id":"google-none","fragments":["no Google connection on this machine. Run `brain connect google --scopes drive,gmail` first."],"kind":"die","file":"brain.mjs","line":19255,"used_by":"both"},
+    {"id":"google-refresh-dead","fragments":["the Google connection is no longer valid and cannot be refreshed. Reconnect with `brain connect google`."],"kind":"warn","file":"connectors/google-auth.mjs","line":1562,"used_by":"both"},
+    {"id":"google-connected","fragments":["Connected Google account: ","connected. Token stored in "," (on this machine only)"],"kind":"ok","file":"brain.mjs","lines":[18460,18480],"used_by":"both"},
+    {"id":"google-busy","fragments":[" ingest is already running on this computer. ","Wait for it to finish, then re-run the same command."],"kind":"die","file":"operations/source-ingest-lock.mjs","lines":[275,276],"used_by":"window"},
+    {"id":"google-client-wall","fragments":["GOOGLE_CLIENT_ID is not set."],"kind":"die","file":"brain.mjs","line":18426,"used_by":"window"},
+    {"id":"google-cancel","fragments":["Google returned \"","\""],"kind":"die","file":"connectors/google-auth.mjs","line":195,"used_by":"window"},
+    {"id":"google-state","fragments":["state mismatch: the redirect did not come from this authorisation request"],"kind":"die","file":"connectors/google-auth.mjs","line":202,"used_by":"window"},
+    {"id":"google-port","fragments":[" is already in use, so the sign-in cannot complete."],"kind":"die","file":"connectors/google-auth.mjs","line":219,"used_by":"window"},
+    {"id":"google-timeout","fragments":["timed out waiting for the browser to complete sign-in"],"kind":"die","file":"connectors/google-auth.mjs","line":236,"used_by":"window"}
+    ,{"id":"health-no-domain","fragments":["this manifest has no saved brain.domain, and no Cloudflare access is available to look up the Brain's workers.dev address."],"kind":"die","file":"brain.mjs","line":3618,"used_by":"window"}
+    ,{"id":"health-no-admin-key","fragments":["no admin key is available, so health cannot prove the authenticated documents endpoint."],"kind":"die","file":"brain.mjs","line":3726,"used_by":"window"}
+    ,{"id":"vector-mismatch","fragments":["Vectorize holds "," vector(s), but D1 requires ","."],"kind":"die","file":"brain.mjs","line":3563,"used_by":"window"}
+    ,{"id":"update-paused-queue","fragments":["This Brain is still paused for an update that has not finished, and it has "," queued search "],"kind":"die","file":"brain.mjs","line":23620,"used_by":"window"}
+    ,{"id":"update-waiting-code","fragments":["UPDATE_WAITING_FOR_INDEXING"],"kind":"die","file":"brain.mjs","line":23648,"used_by":"window"}
+    ,{"id":"update-busy-code-initial","fragments":["UPDATE_BRAIN_BUSY"],"kind":"die","file":"brain.mjs","line":28221,"used_by":"window"}
+    ,{"id":"update-busy-code-prepause","fragments":["UPDATE_BRAIN_BUSY"],"kind":"die","file":"brain.mjs","line":6304,"used_by":"window"}
+    ,{"id":"drain-failed","fragments":["drain failed (","): "],"kind":"die","file":"brain.mjs","line":24603,"used_by":"window"}
+    ,{"id":"agent-refresh-warning","fragments":["The Brain software update is verified, but an existing local AI connection could not be upgraded and verified safely."],"kind":"warn","file":"brain.mjs","line":26905,"used_by":"window"}
+    ,{"id":"preview-complete","fragments":["pre_update_check_complete"],"kind":"info","file":"operations/update-preview.mjs","line":1841,"used_by":"window"}
+    ,{"id":"preview-projection-ready","fragments":["projection_ready"],"kind":"info","file":"operations/update-preview.mjs","line":1844,"used_by":"window"}
+    ,{"id":"preview-work-insufficient","fragments":["UPDATE_PREVIEW_PROJECTION_WORK_INSUFFICIENT"],"kind":"die","file":"operations/update-preview.mjs","line":1862,"used_by":"window"}
+    ,{"id":"preview-work-uncounted","fragments":["UPDATE_PREVIEW_PROJECTION_WORK_UNCOUNTED"],"kind":"die","file":"operations/update-preview.mjs","line":1864,"used_by":"window"}
+    ,{"id":"preview-work-missing","fragments":["UPDATE_PREVIEW_PROJECTION_WORK_MISSING"],"kind":"die","file":"operations/update-preview.mjs","line":1866,"used_by":"window"}
+    ,{"id":"preview-visibility-pending","fragments":["UPDATE_PREVIEW_PROJECTION_VISIBILITY_PENDING"],"kind":"die","file":"operations/update-preview.mjs","line":1868,"used_by":"window"}
+    ,{"id":"preview-projection-excess","fragments":["UPDATE_PREVIEW_PROJECTION_EXCESS"],"kind":"die","file":"operations/update-preview.mjs","line":1870,"used_by":"window"}
+  ]
+}

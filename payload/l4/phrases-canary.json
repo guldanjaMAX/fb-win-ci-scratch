@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "minimum": 1,
+  "entries": [
+    {"id":"canary-verified-spelling","fragments":["upgrade verifed, now at "],"kind":"ok","file":"brain.mjs","line":6499,"used_by":"window"}
+  ]
+}

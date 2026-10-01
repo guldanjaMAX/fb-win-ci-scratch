@@ -1,0 +1,3 @@
+ci/ps/task.ps1 encoded-command
+payload/l0/ps/register.ps1 encoded-command
+payload/l1/ps/register.ps1 encoded-command

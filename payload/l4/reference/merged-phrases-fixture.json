@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "kit_commit": "67e9693132b18c8070bc557ac83d61bbaf612970",
+  "entries": [
+    {
+      "id": "fixture-bookmark",
+      "steps": ["update"],
+      "kind": "stage",
+      "value": "bookmark",
+      "n": 1,
+      "match": "required D1 restore bookmark captured",
+      "source": "brain.mjs:6229"
+    },
+    {
+      "id": "fixture-cpu",
+      "steps": ["update"],
+      "kind": "class",
+      "value": "cpu-reset",
+      "outcome": "failure",
+      "all_of": [
+        {"match":"update stopped during ","source":"brain.mjs:6480"},
+        {"match":"CPU time limit","source":"provider-text","why":"database provider response"}
+      ]
+    }
+  ]
+}

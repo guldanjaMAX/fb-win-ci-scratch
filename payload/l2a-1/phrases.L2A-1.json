@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "kit_commit": "67e9693132b18c8070bc557ac83d61bbaf612970",
+  "entries": [
+    {
+      "id": "health-ready",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-ready",
+      "outcome": "success",
+      "match": "vector index is query-ready (",
+      "source": "brain.mjs:3987",
+      "priority": 10
+    },
+    {
+      "id": "health-pending",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-pending",
+      "outcome": "failure",
+      "match": "are not query-visible yet",
+      "capture": "([0-9,]+) vector operation\\(s\\)",
+      "source": "brain.mjs:3959",
+      "priority": 20
+    },
+    {
+      "id": "health-processing",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-pending",
+      "outcome": "failure",
+      "match": "are still processing",
+      "capture": "([0-9,]+) vector operation\\(s\\)",
+      "source": "brain.mjs:3943",
+      "priority": 20
+    },
+    {
+      "id": "health-capped",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-capped",
+      "outcome": "failure",
+      "match": "over 10,000 pieces",
+      "source": "brain.mjs:3930",
+      "priority": 25
+    },
+    {
+      "id": "health-mismatch",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-mismatch",
+      "outcome": "failure",
+      "match": "Vectorize holds ",
+      "source": "brain.mjs:3563",
+      "priority": 30
+    },
+    {
+      "id": "health-paused",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-paused",
+      "outcome": "failure",
+      "match": "this Brain is paused for an update and cannot accept documents.",
+      "source": "brain.mjs:3873",
+      "priority": 40
+    },
+    {
+      "id": "health-needs-key",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-needs-key",
+      "outcome": "failure",
+      "match": "this manifest has no saved brain.domain, and no Cloudflare access is available",
+      "source": "brain.mjs:3618",
+      "priority": 45
+    },
+    {
+      "id": "smart-app-refused",
+      "steps": ["health", "health-key", "verify"],
+      "kind": "class",
+      "value": "sac-refused",
+      "outcome": "failure",
+      "match": "Windows refused to run the temporary DPAPI helper",
+      "source": "operations/windows-dpapi-session.mjs:45",
+      "priority": 80
+    },
+    {
+      "id": "verify-ok",
+      "steps": ["verify"],
+      "kind": "class",
+      "value": "key-ok",
+      "outcome": "success",
+      "match": "Cloudflare access confirmed for account",
+      "source": "brain.mjs:1721",
+      "priority": 10
+    },
+    {
+      "id": "verify-bad-dates",
+      "steps": ["verify"],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "Cloudflare did not accept ",
+      "source": "brain.mjs:22769",
+      "priority": 50
+    },
+    {
+      "id": "verify-bad-credential",
+      "steps": ["verify"],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "Cloudflare refused the credential:",
+      "source": "brain.mjs:22779",
+      "priority": 50
+    },
+    {
+      "id": "verify-no-account",
+      "steps": ["verify"],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "this Cloudflare approval cannot see any account.",
+      "source": "brain.mjs:1649",
+      "priority": 50
+    },
+    {
+      "id": "verify-wrong-account",
+      "steps": ["verify"],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "but this Cloudflare approval can only see:",
+      "source": "brain.mjs:1656",
+      "priority": 50
+    },
+    {
+      "id": "verify-network",
+      "steps": ["verify"],
+      "kind": "class",
+      "value": "network",
+      "outcome": "failure",
+      "match": "Your internet connection dropped while talking to Cloudflare.",
+      "source": "brain.mjs:22744",
+      "priority": 70
+    }
+  ]
+}
