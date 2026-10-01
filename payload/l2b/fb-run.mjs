@@ -37,6 +37,7 @@ const STANDARD_ENV = [
   "ALLUSERSPROFILE", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS", "OS",
 ];
 const KEY_STEPS = new Set(["health-key", "verify", "update", "deploy-recover"]);
+const PREFLIGHT_STEPS = new Set(["kit-install", "update", "deploy-recover"]);
 const SCRIPT_STEPS = new Set([
   "drive-state", "manifest-edit", "kit-fetch", "google-lease", "google-scopes",
   "google-backup", "google-restore", "google-discard",
@@ -303,7 +304,10 @@ function childEnvironment(plan, planPath) {
   env.FB_RUN_PLAN = planPath;
   if (plan.test) {
     env.FB_WINDOW_TEST = "1";
-    for (const name of ["FB_TEST_HEARTBEAT_MS", "FB_TEST_STALE_MS", "FB_TEST_START_POLL_MS"] ) {
+    for (const name of [
+      "FB_TEST_HANDSHAKE_DELAY_MS", "FB_TEST_HEARTBEAT_MS",
+      "FB_TEST_PREFLIGHT_DELAY_MS", "FB_TEST_STALE_MS", "FB_TEST_START_POLL_MS",
+    ]) {
       if (process.env[name]) env[name] = process.env[name];
     }
   }
@@ -313,6 +317,26 @@ function childEnvironment(plan, planPath) {
 function runId(step) {
   const stamp = utc().replace(/[-:]/gu, "").replace(/\.\d{3}Z$/u, "Z");
   return `${step}-${stamp}-${process.pid}`;
+}
+
+function testMilliseconds(plan, name, fallback) {
+  if (!plan.test || process.env[name] === undefined) return fallback;
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value >= 0 && value <= 120_000 ? value : fallback;
+}
+
+function startDeadlineMilliseconds(plan) {
+  const normalDeadlineMs = PREFLIGHT_STEPS.has(plan.step) ? 60_000 : 5000;
+  return testMilliseconds(plan, "FB_TEST_START_DEADLINE_MS", normalDeadlineMs);
+}
+
+async function testPause(plan, name) {
+  const delay = testMilliseconds(plan, name, 0);
+  if (delay > 0) {
+    appendTrace(plan.session, `test-pause-start ${name} ms=${delay}`);
+    await new Promise((resolveWait) => setTimeout(resolveWait, delay));
+    appendTrace(plan.session, `test-pause-done ${name} ms=${delay}`);
+  }
 }
 
 async function startCommand(argv) {
@@ -339,6 +363,7 @@ async function startCommand(argv) {
       stdio: "ignore",
       env: childEnvironment(plan, planPath),
     });
+    appendTrace(plan.session, `start-child pid=${child.pid}`);
     child.unref();
   } catch {
     rmSync(planPath, { force: true });
@@ -347,7 +372,7 @@ async function startCommand(argv) {
     return;
   }
   const pollMs = plan.test ? Number(process.env.FB_TEST_START_POLL_MS || 10) : 50;
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + startDeadlineMilliseconds(plan);
   while (Date.now() < deadline) {
     const refusalPath = join(folder, "refusal.txt");
     if (existsSync(refusalPath)) {
@@ -365,6 +390,22 @@ async function startCommand(argv) {
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, pollMs));
   }
+  appendTrace(plan.session, `handshake-timeout pid=${child.pid}`);
+  killTree(child);
+  const stopped = await waitForChildExit(child, plan.test ? 2000 : 5000);
+  if (!stopped) {
+    atomicWrite(join(folder, "meta.txt"), [
+      `step=${plan.step}`,
+      `attempt=${plan.attempt}`,
+      `started=${plan.started}`,
+      `child_pid=${child.pid}`,
+      `child_start=${plan.started}`,
+      "",
+    ].join("\n"));
+    console.log(`RUN ${plan.step} ${id}`);
+    return;
+  }
+  rmSync(planPath, { force: true });
   console.log("REFUSED spawn");
   process.exitCode = 3;
 }
@@ -672,12 +713,29 @@ function killTree(child) {
   }
 }
 
+async function waitForChildExit(child, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) return true;
+    try {
+      process.kill(child.pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  return false;
+}
+
 async function childCommand(runid) {
   const planPath = process.env.FB_RUN_PLAN;
   if (!planPath || !existsSync(planPath)) process.exit(3);
   const plan = readJson(planPath, 1024 * 1024);
   unlinkSync(planPath);
   if (plan.runid !== runid || !RUN_ID_RE.test(runid)) process.exit(3);
+
+  await testPause(plan, "FB_TEST_HANDSHAKE_DELAY_MS");
+  if (PREFLIGHT_STEPS.has(plan.step)) await testPause(plan, "FB_TEST_PREFLIGHT_DELAY_MS");
 
   let childStart = utc();
   if (["update", "deploy-recover"].includes(plan.step)) {
@@ -906,6 +964,10 @@ export function registrySnapshotForTest({ session }) {
 
 export function redactForTest(value, exactKey = "") {
   return redactLine(value, exactKey);
+}
+
+export function startDeadlineForTest(step) {
+  return startDeadlineMilliseconds({ step, test: false });
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);

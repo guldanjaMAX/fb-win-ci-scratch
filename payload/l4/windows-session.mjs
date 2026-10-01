@@ -24,7 +24,7 @@ const served = [
   "fb-manifest-edit.mjs", "fb-kit.mjs", "fb-google.mjs", "phrases.json", "facts.json",
 ];
 const stubOutputSteps = new Set([
-  "cli-version", "health", "health-key", "verify", "update-preview", "update",
+  "cli-version", "health", "health-key", "verify", "kit-install", "update-preview", "update",
   "deploy-recover", "google-lease", "google-scopes", "google-backup", "google-restore",
   "google-discard", "google-calendar-check", "google-connect",
 ]);
@@ -366,7 +366,7 @@ async function main() {
   mkdirSync(root, { recursive: true });
   const fixture = makeSession(root, { tier2: true, marker: "tier2\n" });
   for (const name of served) copyFileSync(join(resolve(args.runnerDir), name), join(fixture.session, name));
-  const fakeNode = makeFakeNode(root);
+  const fakeNode = makeFakeNode(fixture.prefix);
   let key = freshKey();
   if (args.arm === "A10-nodigit") key = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStT".slice(0, 40);
   installStub(fixture.prefix, { version: "0.4.9", right_key_sha256: sha256(key), commands: {} });
@@ -461,7 +461,9 @@ async function main() {
   const stubCalls = existsSync(stubCallsPath) ? readCalls(stubCallsPath) : [];
   const helperCallsPath = join(fixture.session, "helper-calls.jsonl");
   const helperCalls = existsSync(helperCallsPath) ? readCalls(helperCallsPath) : [];
-  const allFixtureCalls = stubCalls.concat(helperCalls);
+  const npmCallsPath = join(fixture.prefix, "npm-calls.jsonl");
+  const npmCalls = existsSync(npmCallsPath) ? readCalls(npmCallsPath).map((call) => ({ ...call, command: "npm-cli.js", key_matches: false })) : [];
+  const allFixtureCalls = stubCalls.concat(helperCalls, npmCalls);
   const silentStubCalls = silentExpectedStubCalls(allFixtureCalls);
   const emptyStubSteps = emptyExpectedStubSteps(fixture.session);
   const harnessVoid = silentStubCalls.length > 0 || emptyStubSteps.length > 0;
@@ -506,6 +508,11 @@ async function main() {
       voidReason: harnessVoid ? "expected-stub-output-empty" : null,
       emptyExpectedStubCalls: silentStubCalls.map((call) => call.command),
       emptyExpectedStubSteps: emptyStubSteps,
+      npmResolution: {
+        nodeUnderSelectedPrefix: fakeNode.executable.startsWith(fixture.prefix),
+        entryUnderSelectedPrefix: fakeNode.npmCli.startsWith(fixture.prefix),
+        recordedCalls: npmCalls.length,
+      },
       rawHits: controls.at(-1)?.raw_hits || {},
       pageShaExemptions: 0,
       helperGate,

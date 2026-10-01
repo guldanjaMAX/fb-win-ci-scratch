@@ -59,7 +59,8 @@ const realSessionShape = {
 };
 check(validateRealSessionEvidence(realSessionShape).pass, "windows evidence guard accepts the complete real-session shape");
 const silentStub = [{ command: "verify", output_expected: true, output_bytes: 0 }];
-check(silentExpectedStubCalls(silentStub).length === 1, "expected empty stub output makes the harness VOID before product comparison");
+const nonSilentStub = [{ command: "verify", output_expected: true, output_bytes: 1 }];
+check(silentExpectedStubCalls(silentStub).length === 1 && silentExpectedStubCalls(silentStub)[0].command === "verify" && silentExpectedStubCalls(nonSilentStub).length === 0, "reached expected stub call makes empty output VOID while the non-empty control stays valid");
 
 for (const [id, mutant] of Object.entries(productionMutants)) {
   const source = `before\n${mutant.find}\nafter\n`;
@@ -75,6 +76,8 @@ check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.
 check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
 check(!windowsSessionSource.includes("fb-test-step.json") && windowsSessionSource.includes("scenarioForSupervisorArgv"), "Windows fixtures use production argv instead of the dropped supervisor test environment");
 check(windowsSessionSource.includes("emptyExpectedStubSteps") && armRunnerSource.includes('result.status = "void"'), "empty expected stub output is preserved as VOID through the arm runner");
+check(windowsSessionSource.includes("makeFakeNode(fixture.prefix)"), "Windows session keeps the selected prefix, fake node, and npm entry on one production resolution path");
+check(windowsSessionSource.includes('join(fixture.prefix, "npm-calls.jsonl")'), "Windows session projects the recording npm call into session evidence");
 
 const scratch = mkdtempSync(join(tmpdir(), "phrase-self-test-"));
 check(expectedRunnerNames().length === 9, "runner bridge pins helper plus eight served files");
@@ -171,14 +174,16 @@ const helperScopes1 = spawnSync(process.execPath, [helperStub, "scopes", "--pref
 const helperScopes2 = spawnSync(process.execPath, [helperStub, "scopes", "--prefix", helperFixture.prefix, "--phase", "post"], { cwd: helperFixture.session, encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"], env: { HOME: helperFixture.home, TMPDIR: process.env.TMPDIR, BRAIN_NO_WRANGLER_LOGIN: "1" } });
 check(helperLease.stdout.includes("fb:lease=free") && helperScopes1.stdout.trim() === "fb:record=present" && helperScopes2.stdout.includes("fb:account=same"), "session helper stub advances repeated argv actions without environment routing");
 
-const fakeNode = makeFakeNode(stubRoot);
+const fakeNode = makeFakeNode(fixture.prefix);
 const kitPath = join(fixture.run, "kit", "kit.tgz");
 mkdirSync(join(fixture.run, "kit"), { recursive: true });
 writeFileSync(kitPath, "fixture\n");
 const installArgs = [fakeNode.npmCli, "install", "--global", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", fixture.prefix, kitPath];
 const npmRun = spawnSync(fakeNode.executable, installArgs, { cwd: fixture.session, encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"] });
 const npmCall = JSON.parse(readFileSync(join(fixture.prefix, "npm-calls.jsonl"), "utf8").trim());
-check(npmRun.status === 0 && JSON.stringify(npmCall.argv) === JSON.stringify(installArgs.slice(1)), "recording npm entry point receives exact install argv");
+check(fakeNode.executable.startsWith(fixture.prefix) && fakeNode.npmCli.startsWith(fixture.prefix), "fake node and npm entry are beneath the selected prefix");
+check(npmRun.status === 0 && npmRun.stdout === "added 1 package in 1s\n" && JSON.stringify(npmCall.argv) === JSON.stringify(installArgs.slice(1)), "recording npm entry point emits deterministic npm success output and receives exact install argv");
+check(npmCall.command === "npm-cli.js" && npmCall.output_expected === true && npmCall.output_bytes === Buffer.byteLength(npmRun.stdout), "recording npm call carries non-silent evidence metadata");
 
 const large = makeLargeDriveState(fixture.manifestDir);
 const driveStart = process.hrtime.bigint();

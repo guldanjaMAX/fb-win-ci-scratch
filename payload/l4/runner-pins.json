@@ -16,8 +16,8 @@
     {
       "name": "fb-run.mjs",
       "source": "payload/l2b/fb-run.mjs",
-      "bytes": 32910,
-      "sha256": "29b0e57fc85a19590b647bcb0ed02468a12096fb906100af1f5e0c52289c3e2b"
+      "bytes": 35083,
+      "sha256": "435c768787b9258ac414b481088fea0f22555c6cb51c56eb0752d708d654332f"
     },
     {
       "name": "fb-drive-state.mjs",
