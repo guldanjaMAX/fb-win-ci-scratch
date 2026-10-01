@@ -105,9 +105,11 @@ const call = {
   env_names: names,
   key_matches: Boolean(scenario.right_key_sha256) && hash(key) === scenario.right_key_sha256,
   output_expected: action.expect_output === true || command === "version" || scenario.expected_output_commands?.includes(command) === true,
-  output_bytes: outputBytes
+  output_bytes: outputBytes,
+  pid: process.pid
 };
 appendFileSync(callsPath, `${JSON.stringify(call)}\n`, { encoding: "utf8" });
 if (action.processes) writeFileSync(scenario.processes_path, `${JSON.stringify(action.processes)}\n`, "utf8");
 if (Number(action.delay_ms) > 0) await new Promise((resolveWait) => setTimeout(resolveWait, Number(action.delay_ms)));
+for (const line of action.after_delay_raw || []) emit(`${line}\n`);
 process.exitCode = Number.isInteger(action.exit) ? action.exit : 0;

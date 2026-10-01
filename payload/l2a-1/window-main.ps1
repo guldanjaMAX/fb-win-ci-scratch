@@ -1,3 +1,7 @@
+function Invoke-FbW8Safe {
+    try { [void](Invoke-FbW8) } catch { Write-FbStatus -Step 'W8' -Code 'STOP' -Reason 'check-failed' }
+}
+
 function Invoke-FbWindowMain {
     try {
         Initialize-FbCore
@@ -17,39 +21,42 @@ function Invoke-FbWindowMain {
         }
         if ($w1 -ceq 'stop') { [void](Invoke-FbW11); return }
         if (-not $FB.Tier2On -and $FB.W8On) {
-            [void](Invoke-FbW8)
+            [void](Invoke-FbW8Safe)
             [void](Invoke-FbW11)
             return
         }
         if ($w1 -ceq 'finish-later') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
         $w3 = Invoke-FbW3
         if ($w3 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
         if ($FB.PausedChoice -ceq 'deploy-recover') {
+            if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey); [void](Invoke-FbW11); return }
             $recoverRun = Start-FbStep -Step 'deploy-recover' -WithKey -DecisionId $FB.PausedDecisionId
             if ($recoverRun) {
                 $recover = Wait-FbStep -RunId $recoverRun -TimeoutSec 960
-                if ($recover.Exit -ne 0) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed' }
+                if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey) }
+                elseif ($recover.Exit -ne 0) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed' }
+                else { Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'recovered' }
             } else { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed' }
             [void](Invoke-FbW11)
             return
         }
         $w4 = Invoke-FbW4
         if ($w4 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
         $w5 = Invoke-FbW5
         if ($w5 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
@@ -57,11 +64,11 @@ function Invoke-FbWindowMain {
         if ($w6 -cne 'pass') { [void](Invoke-FbW11); return }
         $w7 = Start-FbW7
         if ($w7 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
-        if ($FB.W8On) { [void](Invoke-FbW8) }
+        if ($FB.W8On) { [void](Invoke-FbW8Safe) }
         [void](Complete-FbW7 -RunId $FB.W7RunId)
         [void](Invoke-FbW11)
     } catch {

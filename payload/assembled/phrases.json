@@ -108,6 +108,32 @@
       "priority": 10
     },
     {
+      "id": "health-vectorize-paused",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-paused",
+      "outcome": "failure",
+      "match": "Vectorize has accepted work that is not query-visible yet while this Brain is paused for an update.",
+      "source": "brain.mjs:3976",
+      "priority": 46
+    },
+    {
+      "id": "health-vectorize-pending",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-pending",
+      "outcome": "failure",
+      "match": "Vectorize has accepted work that is not query-visible yet.",
+      "source": "brain.mjs:3981",
+      "priority": 21
+    },
+    {
       "id": "kit-install-ebusy",
       "steps": [
         "kit-install"

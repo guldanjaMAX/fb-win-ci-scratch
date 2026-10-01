@@ -17,7 +17,10 @@ $script:FB = @{
     Tier2On = $false
     W8On = $false
     TestSeam = $false
+    ConsoleHost = 'unknown'
+    QuickEditOff = $false
     KeyReady = $false
+    KeyVisibleStopped = $false
     LastRefusal = $null
     HealthResult = $null
     HealthRead = $false
@@ -28,16 +31,53 @@ $script:FB = @{
     LastDecisionId = $null
     HistoryOn = $false
     CloudClipboardOn = $false
+    DriveTerminal = $false
     W7RunId = $null
 }
 
+function Disable-FbQuickEdit {
+    $FB.ConsoleHost = 'unknown'
+    $FB.QuickEditOff = $false
+    if ($env:WT_SESSION -or $env:TERM_PROGRAM -ceq 'Windows_Terminal') {
+        $FB.ConsoleHost = 'terminal'
+        return
+    }
+    try {
+        $consoleType = $null
+        foreach ($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) {
+            $consoleType = $assembly.GetType('Microsoft.PowerShell.ConsoleControl', $false)
+            if ($null -ne $consoleType) { break }
+        }
+        if ($null -eq $consoleType) { return }
+        $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
+        $getHandle = @($consoleType.GetMethods($flags) | Where-Object { $_.Name -ceq 'GetStdHandle' })[0]
+        $getMode = @($consoleType.GetMethods($flags) | Where-Object { $_.Name -ceq 'GetMode' })[0]
+        $setMode = @($consoleType.GetMethods($flags) | Where-Object { $_.Name -ceq 'SetMode' })[0]
+        if ($null -eq $getHandle -or $null -eq $getMode -or $null -eq $setMode) { return }
+        $handle = $getHandle.Invoke($null, @(-10))
+        if ($null -eq $handle -or $handle.IsInvalid) { return }
+        $modeArguments = @($handle, [uint32]0)
+        if (-not [bool]$getMode.Invoke($null, $modeArguments)) { return }
+        $FB.ConsoleHost = 'conhost'
+        $mode = [uint32]$modeArguments[1]
+        $newMode = [uint32]($mode -band (-bnot 0x0040))
+        if ($newMode -eq $mode) { $FB.QuickEditOff = $true; return }
+        $FB.QuickEditOff = [bool]$setMode.Invoke($null, @($handle, $newMode))
+    } catch {
+        $FB.QuickEditOff = $false
+    }
+}
+
 function Initialize-FbCore {
-    $host.UI.RawUI.WindowTitle = 'Financial Brain update'
-    $host.UI.RawUI.BackgroundColor = 'DarkBlue'
-    $host.UI.RawUI.ForegroundColor = 'White'
-    Clear-Host
+    try {
+        $host.UI.RawUI.WindowTitle = 'Financial Brain update'
+        $host.UI.RawUI.BackgroundColor = 'DarkBlue'
+        $host.UI.RawUI.ForegroundColor = 'White'
+        Clear-Host
+    } catch {}
     [IO.Directory]::CreateDirectory($FB.Run) | Out-Null
     [IO.Directory]::CreateDirectory((Join-Path $FB.Run 'steps')) | Out-Null
+    Disable-FbQuickEdit
     $factsPath = Join-Path $FB.Session 'facts.json'
     if (-not (Test-Path -LiteralPath $factsPath -PathType Leaf)) { throw 'facts missing' }
     if ((Get-Item -LiteralPath $factsPath).Length -gt 1MB) { throw 'facts too large' }
@@ -228,7 +268,8 @@ function Wait-FbStep {
     param(
         [Parameter(Mandatory=$true)][string]$RunId,
         [int]$TimeoutSec = 0,
-        [scriptblock]$OnEvent
+        [scriptblock]$OnEvent,
+        [switch]$AllowKeyVisible
     )
     $folder = Join-Path (Join-Path $FB.Run 'steps') $RunId
     $eventsPath = Join-Path $folder 'events.txt'
@@ -239,7 +280,10 @@ function Wait-FbStep {
     $started = [DateTime]::UtcNow
     $lastHeartbeat = $started
     while ($true) {
-        if (Test-FbKeyVisible) { return @{ Exit = 1; Class = 'key-visible'; Events = $events } }
+        if ($AllowKeyVisible -and (Test-FbKeyVisible)) { return @{ Exit = 1; Class = 'key-visible'; Events = $events; RealExit = $false } }
+        # The supervisor closes events.txt before it writes exit.txt, so sample exit.txt BEFORE reading
+        # events: when it already existed, this read holds every event (no lost final fact).
+        $exitSeen = Test-Path -LiteralPath $exitPath -PathType Leaf
         if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
             $all = @(Get-Content -LiteralPath $eventsPath)
             if ($all.Count -gt $seen) {
@@ -250,20 +294,20 @@ function Wait-FbStep {
                 $seen = $all.Count
             }
         }
-        if (Test-Path -LiteralPath $exitPath -PathType Leaf) {
-            $exitLine = (Get-Content -LiteralPath $exitPath -Raw).Trim()
+        if ($exitSeen) {
+            $exitLine = ([string](Get-Content -LiteralPath $exitPath -Raw)).Trim()
             if ($exitLine -match '^EXIT\s+(-?\d+)\s+([a-z0-9-]+)\s+') {
-                return @{ Exit = [int]$Matches[1]; Class = $Matches[2]; Events = $events }
+                return @{ Exit = [int64]$Matches[1]; Class = $Matches[2]; Events = $events; RealExit = $true }
             }
             throw 'bad step exit'
         }
         if (Test-Path -LiteralPath $alivePath -PathType Leaf) {
             if (((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $alivePath).LastWriteTimeUtc).TotalSeconds -gt 60) {
-                return @{ Exit = 1; Class = 'dead'; Events = $events }
+                return @{ Exit = 1; Class = 'dead'; Events = $events; RealExit = $false }
             }
         }
         if ($TimeoutSec -gt 0 -and (([DateTime]::UtcNow - $started).TotalSeconds -ge $TimeoutSec)) {
-            return @{ Exit = 1; Class = 'timeout'; Events = $events }
+            return @{ Exit = 1; Class = 'timeout'; Events = $events; RealExit = $false }
         }
         if (([DateTime]::UtcNow - $lastHeartbeat).TotalSeconds -ge (Get-FbScaledSeconds 120)) {
             Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'heartbeat'
@@ -310,7 +354,7 @@ function Get-FbScaledSeconds {
 function Test-FbKeyVisible {
     $decisionPath = Join-Path $FB.Run 'decision.txt'
     if (-not (Test-Path -LiteralPath $decisionPath -PathType Leaf)) { return $false }
-    $line = (Get-Content -LiteralPath $decisionPath -Raw).Trim()
+    $line = ([string](Get-Content -LiteralPath $decisionPath -Raw)).Trim()
     return $line -ceq 'key-visible' -or $line -match '^key-visible\s+id='
 }
 
@@ -327,17 +371,20 @@ function Wait-FbDecision {
     $decisionPath = Join-Path $FB.Run 'decision.txt'
     $started = [DateTime]::UtcNow
     $lastHeartbeat = $started
+    $lastIgnoredLine = $null
     $limit = if ($DefaultAfterSec -gt 0) { Get-FbScaledSeconds $DefaultAfterSec } else { 0 }
     while ($true) {
         if (Test-Path -LiteralPath $decisionPath -PathType Leaf) {
-            $line = (Get-Content -LiteralPath $decisionPath -Raw).Trim()
+            $line = ([string](Get-Content -LiteralPath $decisionPath -Raw)).Trim()
             if ($line -ceq 'key-visible' -or $line -match '^key-visible\s+id=') { return 'key-visible' }
             if ($line -match '^(\S+)\s+id=([0-9a-f]{6})$') {
                 $word = $Matches[1]
                 $foundId = $Matches[2]
                 if ($foundId -ceq $id -and $Words -ccontains $word) { $FB.LastDecisionId = $id; return $word }
-                Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'decision-ignored'
-                Remove-Item -LiteralPath $decisionPath -Force -ErrorAction SilentlyContinue
+                if ($foundId -cne $FB.LastDecisionId -and $line -cne $lastIgnoredLine) {
+                    Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'decision-ignored'
+                    $lastIgnoredLine = $line
+                }
             }
         }
         if ($limit -gt 0 -and (([DateTime]::UtcNow - $started).TotalSeconds -ge $limit)) { return $Default }
@@ -404,7 +451,7 @@ function Read-FbStepLine {
     $path = Join-Path (Join-Path (Join-Path $FB.Run 'steps') $RunId) 'out.log'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }
     if ((Get-Item -LiteralPath $path).Length -gt 1MB) { throw 'step output too large' }
-    return (Get-Content -LiteralPath $path -Raw).Trim()
+    return ([string](Get-Content -LiteralPath $path -Raw)).Trim()
 }
 
 function Get-FbEventFact {
@@ -438,6 +485,14 @@ function Flush-FbInput {
     try { $host.UI.RawUI.FlushInputBuffer() } catch {}
 }
 
+function Get-FbRegValue {
+    param([object]$Object, [string]$Name)
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
 function Get-FbMachineFacts {
     $result = @{
         Sac = 'unknown'
@@ -466,11 +521,12 @@ function Get-FbMachineFacts {
     try {
         $clip = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Clipboard' -ErrorAction SilentlyContinue
         $policy = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -ErrorAction SilentlyContinue
-        $historyOn = $null -ne $clip -and $clip.EnableClipboardHistory -eq 1
-        $policyOff = $null -ne $policy -and $policy.AllowClipboardHistory -eq 0
+        $historyOn = (Get-FbRegValue -Object $clip -Name 'EnableClipboardHistory') -eq 1
+        $policyOff = (Get-FbRegValue -Object $policy -Name 'AllowClipboardHistory') -eq 0
         $result.History = $historyOn -and -not $policyOff
-        $result.Cloud = $null -ne $clip -and ($clip.EnableCloudClipboard -eq 1 -or $clip.CloudClipboardAutomaticUpload -eq 1)
-    } catch {}
+        $result.Cloud = (Get-FbRegValue -Object $clip -Name 'EnableCloudClipboard') -eq 1 -or
+            (Get-FbRegValue -Object $clip -Name 'CloudClipboardAutomaticUpload') -eq 1
+    } catch { $result.History = $true; $result.Cloud = $true }
     try {
         $products = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct)
         $thirdParty = @($products | Where-Object { [string]$_.displayName -notmatch '^Windows Defender' })
@@ -490,29 +546,29 @@ function Invoke-FbHealthRead {
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         if ($WithKey) { $runId = Start-FbStep -Step 'health-key' -WithKey }
         else { $runId = Start-FbStep -Step 'health' }
-        if (-not $runId) { return @{ Exit = 1; Class = 'refused'; Events = @() } }
-        $last = Wait-FbStep -RunId $runId -TimeoutSec 360
+        if (-not $runId) { return @{ Exit = 1; Class = 'refused'; Events = @(); RealExit = $false } }
+        $last = Wait-FbStep -RunId $runId -TimeoutSec 360 -AllowKeyVisible
         if ($last.Class -cne 'sac-refused') { return $last }
     }
-    return @{ Exit = 1; Class = 'health-unreadable'; Events = $last.Events }
+    return @{ Exit = 1; Class = 'health-unreadable'; Events = $last.Events; RealExit = $false }
 }
 
 function Invoke-FbVerifyRead {
     $last = $null
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         $runId = Start-FbStep -Step 'verify' -WithKey
-        if (-not $runId) { return @{ Exit = 1; Class = 'refused'; Events = @() } }
-        $last = Wait-FbStep -RunId $runId -TimeoutSec 360
+        if (-not $runId) { return @{ Exit = 1; Class = 'refused'; Events = @(); RealExit = $false } }
+        $last = Wait-FbStep -RunId $runId -TimeoutSec 360 -AllowKeyVisible
         if ($last.Class -cne 'sac-refused') { return $last }
     }
-    return @{ Exit = 1; Class = 'other'; Events = $last.Events }
+    return @{ Exit = 1; Class = 'other'; Events = $last.Events; RealExit = $false }
 }
 
 function Invoke-FbVerifyWithNetwork {
     $result = Invoke-FbVerifyRead
-    if ($result.Class -cne 'network') { return @{ Outcome = 'result'; Result = $result } }
+    if (@('key-ok','key-rejected','key-visible') -ccontains $result.Class) { return @{ Outcome = 'result'; Result = $result } }
     $result = Invoke-FbVerifyRead
-    while ($result.Class -ceq 'network') {
+    while (@('key-ok','key-rejected','key-visible') -cnotcontains $result.Class) {
         Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'verify-network'
         $choice = Wait-FbDecision -Step 'W3' -Reason 'verify-network' -Words @('retry','finish-later')
         if ($choice -ceq 'key-visible') { return @{ Outcome = 'key-visible'; Result = $result } }
@@ -527,8 +583,8 @@ function Read-FbSelection {
     $manifestFiles = @(Get-ChildItem -LiteralPath $FB.Session -Filter 'selected-manifest-*.txt' -File)
     if ($prefixFiles.Count -ne 1 -or $manifestFiles.Count -ne 1) { return $false }
     if ($prefixFiles[0].Length -gt 16KB -or $manifestFiles[0].Length -gt 16KB) { return $false }
-    $FB.Prefix = (Get-Content -LiteralPath $prefixFiles[0].FullName -Raw).Trim()
-    $FB.Manifest = (Get-Content -LiteralPath $manifestFiles[0].FullName -Raw).Trim()
+    $FB.Prefix = ([string](Get-Content -LiteralPath $prefixFiles[0].FullName -Raw)).Trim()
+    $FB.Manifest = ([string](Get-Content -LiteralPath $manifestFiles[0].FullName -Raw)).Trim()
     if (-not (Test-Path -LiteralPath $FB.Manifest -PathType Leaf)) {
         Write-FbStatus -Step 'W1' -Code 'STOP' -Reason 'manifest-missing'
         return $false
@@ -544,6 +600,8 @@ function Read-FbSelection {
 function Invoke-FbW1 {
     try {
         Write-FbStatus -Step 'W1' -Code 'START' -Reason 'readout'
+        Write-FbStatus -Step 'W1' -Code 'INFO' -Reason ('console-' + $FB.ConsoleHost)
+        if ($FB.QuickEditOff) { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'quickedit-off' } else { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'quickedit-unchanged' }
         if (-not $FB.Tier2On -and -not $FB.W8On) {
             Write-FbStatus -Step 'W1' -Code 'STOP' -Reason 'tier2-off'
             Show-FbLine -Key 'W1-CHECK'
@@ -568,6 +626,7 @@ function Invoke-FbW1 {
 
         $nodeRun = Start-FbStep -Step 'node-version'
         $nodeResult = Wait-FbStep -RunId $nodeRun -TimeoutSec 40
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $nodeVersion = Read-FbStepLine $nodeRun
         Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'node-version'
         if ($nodeResult.Exit -ne 0 -or $nodeVersion -notmatch '^v(\d+)\.' -or [int]$Matches[1] -lt 22) {
@@ -577,6 +636,7 @@ function Invoke-FbW1 {
         }
         $cliRun = Start-FbStep -Step 'cli-version'
         $cliResult = Wait-FbStep -RunId $cliRun -TimeoutSec 70
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $FB.CliVersion = Read-FbStepLine $cliRun
         Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'cli-version'
         if ($cliResult.Exit -ne 0) {
@@ -602,12 +662,14 @@ function Invoke-FbW1 {
         if ($processes.Load) { $driveRun = Start-FbStep -Step 'drive-state' -Variant 'load-yes' }
         else { $driveRun = Start-FbStep -Step 'drive-state' -Variant 'load-no' }
         $driveResult = Wait-FbStep -RunId $driveRun -TimeoutSec 130
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $domain = Get-FbEventFact -Result $driveResult -Name 'domain'
         $FB.DomainPresent = $domain -ceq 'yes'
         if ($FB.DomainPresent) { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'domain-yes' }
         else { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'domain-no' }
         $driveState = Get-FbEventFact -Result $driveResult -Name 'drive_state'
         $driveTerminal = Get-FbEventFact -Result $driveResult -Name 'terminal'
+        $FB.DriveTerminal = $driveTerminal -ceq 'yes'
         $driveReview = Get-FbEventFact -Result $driveResult -Name 'review'
         if ($driveReview -ceq 'yes') { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'drive-review' }
         if ($driveState -ceq 'unreadable' -or $driveResult.Exit -eq 2) { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'drive-unreadable' }
@@ -619,6 +681,7 @@ function Invoke-FbW1 {
         if ($FB.DomainPresent) {
             $FB.HealthResult = Invoke-FbHealthRead
             $FB.HealthRead = $true
+            if ($FB.HealthResult.Class -ceq 'key-visible') { return Stop-FbVisibleKey }
             if ($FB.HealthResult.Class -ceq 'health-ready') { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'health-ready' }
             elseif ($FB.HealthResult.Class -ceq 'health-pending' -or $FB.HealthResult.Class -ceq 'health-capped') { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'health-pending' }
             elseif ($FB.HealthResult.Class -ceq 'health-mismatch') { Write-FbStatus -Step 'W1' -Code 'INFO' -Reason 'health-mismatch' }
@@ -662,7 +725,7 @@ function Invoke-FbW1 {
         }
         if ($FB.HealthRead -and $FB.HealthResult.Class -ceq 'health-paused') {
             if (-not $FB.Tier2On) { return 'pass' }
-            $choice = Wait-FbDecision -Step 'W1' -Reason 'brain-paused' -Words @('continue','deploy-recover','finish-later')
+            $choice = Wait-FbDecision -Step 'W1' -Reason 'brain-paused' -Words @('deploy-recover','finish-later')
             if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
             $FB.PausedChoice = $choice
             $FB.PausedDecisionId = $FB.LastDecisionId
@@ -687,8 +750,14 @@ function Get-FbClipboardText {
 function Clear-FbClipboard {
     if ($FB.TestSeam) {
         Remove-Item -LiteralPath (Join-Path $FB.Session 'test-clipboard.txt') -Force -ErrorAction SilentlyContinue
+        return $true
     } else {
-        Set-Clipboard -Value ' '
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try { Set-Clipboard -Value ' '; return $true } catch {
+                if ($attempt -lt 3) { Start-Sleep -Milliseconds 100 }
+            }
+        }
+        return $false
     }
 }
 
@@ -762,7 +831,7 @@ function Save-FbKey {
     try {
         $protected = ConvertFrom-SecureString $script:FbKey
         [IO.File]::WriteAllText($temp, ($protected + "`n"), $script:FbUtf8)
-        $roundTrip = ConvertTo-SecureString ((Get-Content -LiteralPath $temp -Raw).Trim())
+        $roundTrip = ConvertTo-SecureString (([string](Get-Content -LiteralPath $temp -Raw)).Trim())
         $a = [IntPtr]::Zero
         $b = [IntPtr]::Zero
         try {
@@ -784,6 +853,8 @@ function Save-FbKey {
 
 function Stop-FbVisibleKey {
     Remove-FbHeldKey
+    if ($FB.KeyVisibleStopped) { return 'stop' }
+    $FB.KeyVisibleStopped = $true
     Write-FbStatus -Step 'W3' -Code 'STOP' -Reason 'key-visible'
     Show-FbLine -Key 'W3-LATER'
     return 'stop'
@@ -798,7 +869,7 @@ function Invoke-FbW3 {
             Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'key-file-found'
             Show-FbLine -Key 'W3-USING-SAVED'
             try {
-                $script:FbKey = ConvertTo-SecureString ((Get-Content -LiteralPath $keyPath -Raw).Trim())
+                $script:FbKey = ConvertTo-SecureString (([string](Get-Content -LiteralPath $keyPath -Raw)).Trim())
                 $FB.KeyReady = $true
                 $savedFlow = Invoke-FbVerifyWithNetwork
                 if ($savedFlow.Outcome -ceq 'key-visible') { return Stop-FbVisibleKey }
@@ -854,22 +925,27 @@ function Invoke-FbW3 {
                 if ($observedCandidates -cnotcontains $candidate) { $observedCandidates += $candidate }
             }
             if ($candidates.Count -gt 1) {
-                Clear-FbClipboard
+                [void](Clear-FbClipboard)
                 Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'two-candidates'
                 Show-FbLine -Key 'W3-TWO'
                 Start-Sleep -Milliseconds 500
                 continue
             }
             if ($candidates.Count -ne 1) {
-                if ($text) { Clear-FbClipboard }
+                if ($text -and -not [string]::IsNullOrWhiteSpace([string]$text)) { [void](Clear-FbClipboard) }
                 Start-Sleep -Milliseconds 500
                 continue
             }
-            $script:FbKey = ConvertTo-SecureString $candidates[0] -AsPlainText -Force
+            $candidateText = [string]$candidates[0]
+            $secureKey = New-Object System.Security.SecureString
+            foreach ($character in $candidateText.ToCharArray()) { $secureKey.AppendChar($character) }
+            $secureKey.MakeReadOnly()
+            $script:FbKey = $secureKey
             $candidates = @()
+            $candidateText = $null
             $text = $null
             $FB.KeyReady = $true
-            Clear-FbClipboard
+            if (-not (Clear-FbClipboard)) { return Stop-FbVisibleKey }
             Write-FbStatus -Step 'W3' -Code 'INFO' -Reason 'got-it'
             if ($FB.HistoryOn) {
                 if (Remove-FbClipboardHistoryCandidates -Candidates $observedCandidates) {
@@ -902,6 +978,11 @@ function Invoke-FbW3 {
                 Show-FbLine -Key 'W3-SHARE'
                 return 'pass'
             }
+            if ($verify.Class -cne 'key-rejected') {
+                Remove-FbHeldKey
+                Show-FbLine -Key 'W3-LATER'
+                return 'finish-later'
+            }
             Remove-FbHeldKey
             $badKeys++
             Set-FbProgress -Key 'w3_bad_keys' -Value ([string]$badKeys)
@@ -922,6 +1003,13 @@ function Invoke-FbW3 {
     }
 }
 
+function Test-FbW4Ready {
+    param([object]$Result)
+    if ($Result.Class -ceq 'health-ready') { return $true }
+    $pending = Get-FbPendingCount $Result
+    return $null -ne $pending -and $pending -eq 0
+}
+
 function Invoke-FbW4 {
     try {
         if ($FB.LoadRunning) {
@@ -933,6 +1021,7 @@ function Invoke-FbW4 {
                 Start-Sleep -Seconds ([Math]::Min((Get-FbScaledSeconds 120), [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
                 Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'heartbeat'
             }
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             $processes = Test-FbProcesses
             if ($processes.Load) { Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'; Show-FbLine -Key 'W4-LATER'; return 'finish-later' }
         }
@@ -942,37 +1031,66 @@ function Invoke-FbW4 {
             $FB.HealthRead = $true
             $FB.HealthResult = $reading
         }
+        if ($reading.Class -ceq 'key-visible') { return Stop-FbVisibleKey }
         if ($reading.Class -ceq 'health-paused') { Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'; Show-FbLine -Key 'W4-LATER'; return 'finish-later' }
         $pending = Get-FbPendingCount $reading
         $capped = $reading.Class -ceq 'health-capped'
-        if (($null -eq $pending -or $pending -le 0) -and -not $capped) {
-            Write-FbStatus -Step 'W4' -Code 'PASS' -Reason 'queue-zero'
-            Set-FbProgress -Key 'w4_result' -Value 'pass'
-            return 'pass'
+        if (($null -ne $pending -and $pending -gt 0) -or $capped) {
+            # A real backlog keeps the shipped lead decision: wait for the projected drain, or finish later.
+            if ($capped) { Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'capped'; $shown = 10000 }
+            else { Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'pending' -N ([int]$pending); $shown = [int]$pending }
+            $projection = [int][Math]::Ceiling(([double]$shown) / [double]$FB.Facts.drain_per_minute)
+            Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'projection' -N $projection
+            Show-FbLine -Key 'W4-BUSY' -Fill @{ n = $shown; m = $projection }
+            $choice = Wait-FbDecision -Step 'W4' -Reason 'queue' -Words @('wait','finish-later') -DefaultAfterSec 600 -Default 'finish-later'
+            if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
+            if ($choice -cne 'wait') { Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'; Show-FbLine -Key 'W4-LATER'; return 'finish-later' }
+            $minutes = [Math]::Max($projection, 8)
+            $waitUntil = [DateTime]::UtcNow.AddSeconds((Get-FbScaledSeconds ($minutes * 60)))
+            while ([DateTime]::UtcNow -lt $waitUntil) {
+                Start-Sleep -Seconds ([Math]::Min((Get-FbScaledSeconds 120), [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
+                Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'heartbeat'
+            }
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
+            Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'wait-elapsed'
+            if ($FB.DomainPresent) { $second = Invoke-FbHealthRead }
+            else { $second = Invoke-FbHealthRead -WithKey }
+            if ($second.Class -ceq 'key-visible') { return Stop-FbVisibleKey }
+            if (-not (Test-FbW4Ready -Result $second)) {
+                Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'
+                Show-FbLine -Key 'W4-LATER'
+                return 'finish-later'
+            }
+            $reading = $second
         }
-        if ($capped) { Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'capped'; $shown = 10000 }
-        else { Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'pending' -N ([int]$pending); $shown = [int]$pending }
-        $projection = [int][Math]::Ceiling(([double]$shown) / [double]$FB.Facts.drain_per_minute)
-        Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'projection' -N $projection
-        Show-FbLine -Key 'W4-BUSY' -Fill @{ n = $shown; m = $projection }
-        $choice = Wait-FbDecision -Step 'W4' -Reason 'queue' -Words @('wait','finish-later') -DefaultAfterSec 600 -Default 'finish-later'
-        if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
-        if ($choice -cne 'wait') { Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'; Show-FbLine -Key 'W4-LATER'; return 'finish-later' }
-        $minutes = [Math]::Max($projection, 8)
-        $waitUntil = [DateTime]::UtcNow.AddSeconds((Get-FbScaledSeconds ($minutes * 60)))
-        while ([DateTime]::UtcNow -lt $waitUntil) {
-            Start-Sleep -Seconds ([Math]::Min((Get-FbScaledSeconds 120), [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
-            Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'heartbeat'
+        if (-not (Test-FbW4Ready -Result $reading)) {
+            # Unreadable health never passes. A Vectorize catch-up reading (no count) gets four
+            # re-reads a minute apart; anything else gets one re-read after thirty seconds.
+            $catchUp = $reading.Class -ceq 'health-pending'
+            $rereads = if ($catchUp) { 4 } else { 1 }
+            $gapSec = if ($catchUp) { Get-FbScaledSeconds 60 } else { Get-FbScaledSeconds 30 }
+            $ready = $false
+            $second = $null
+            for ($attempt = 1; $attempt -le $rereads -and -not $ready; $attempt++) {
+                $waitUntil = [DateTime]::UtcNow.AddSeconds($gapSec)
+                while ([DateTime]::UtcNow -lt $waitUntil) {
+                    Start-Sleep -Seconds ([Math]::Min(2, [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
+                }
+                if ($catchUp) { Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'heartbeat' }
+                if ($FB.DomainPresent) { $second = Invoke-FbHealthRead }
+                else { $second = Invoke-FbHealthRead -WithKey }
+                if ($second.Class -ceq 'key-visible') { return Stop-FbVisibleKey }
+                if ($second.Class -ceq 'health-paused') { break }
+                $ready = Test-FbW4Ready -Result $second
+            }
+            if (-not $ready) {
+                Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'
+                Show-FbLine -Key 'W4-LATER'
+                return 'finish-later'
+            }
+            $reading = $second
         }
-        Write-FbStatus -Step 'W4' -Code 'INFO' -Reason 'wait-elapsed'
-        if ($FB.DomainPresent) { $second = Invoke-FbHealthRead }
-        else { $second = Invoke-FbHealthRead -WithKey }
-        $secondPending = Get-FbPendingCount $second
-        if ($second.Class -ceq 'health-pending' -or $second.Class -ceq 'health-capped' -or ($null -ne $secondPending -and $secondPending -gt 0)) {
-            Write-FbStatus -Step 'W4' -Code 'SKIP' -Reason 'finish-later'
-            Show-FbLine -Key 'W4-LATER'
-            return 'finish-later'
-        }
+        if (-not (Test-FbW4Ready -Result $reading)) { throw 'W4 readiness invariant' }
         Write-FbStatus -Step 'W4' -Code 'PASS' -Reason 'queue-zero'
         Set-FbProgress -Key 'w4_result' -Value 'pass'
         return 'pass'
@@ -986,7 +1104,10 @@ function Invoke-FbW11 {
     try {
         if ($FB.KeyReady -and -not $FB.DomainPresent) {
             $lastKeyHealth = Start-FbStep -Step 'health-key' -WithKey
-            if ($lastKeyHealth) { [void](Wait-FbStep -RunId $lastKeyHealth -TimeoutSec 360) }
+            if ($lastKeyHealth) {
+                $keyHealthResult = Wait-FbStep -RunId $lastKeyHealth -TimeoutSec 360 -AllowKeyVisible
+                if ($keyHealthResult.Class -ceq 'key-visible') { [void](Stop-FbVisibleKey) }
+            }
             Write-FbStatus -Step 'W11' -Code 'INFO' -Reason 'health-with-key'
         }
         Remove-FbHeldKey
@@ -996,7 +1117,8 @@ function Invoke-FbW11 {
         if ($FB.DomainPresent -and $FB.Node -and $FB.Manifest) {
             $healthRun = Start-FbStep -Step 'health'
             if ($healthRun) {
-                $health = Wait-FbStep -RunId $healthRun -TimeoutSec 360
+                $health = Wait-FbStep -RunId $healthRun -TimeoutSec 360 -AllowKeyVisible
+                if ($health.Class -ceq 'key-visible') { [void](Stop-FbVisibleKey) }
                 if ($health.Exit -eq 0) { Write-FbStatus -Step 'W11' -Code 'INFO' -Reason 'health-no-key' }
                 else { Write-FbStatus -Step 'W11' -Code 'INFO' -Reason 'health-failed' }
             } else { Write-FbStatus -Step 'W11' -Code 'INFO' -Reason 'health-failed' }
@@ -1004,6 +1126,7 @@ function Invoke-FbW11 {
         if ($FB.Node -and $FB.Cli) {
             $versionRun = Start-FbStep -Step 'cli-version'
             $version = Wait-FbStep -RunId $versionRun -TimeoutSec 70
+            if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey) }
             $versionText = Read-FbStepLine $versionRun
             if ($version.Exit -eq 0 -and $versionText -ceq [string]$FB.Facts.kit_version) { Write-FbStatus -Step 'W11' -Code 'INFO' -Reason 'version-match' }
             else { Write-FbStatus -Step 'W11' -Code 'INFO' -Reason 'version-other' }
@@ -1019,12 +1142,7 @@ function Invoke-FbW11 {
 }
 
 function Test-FbW1DriveTerminal {
-    $statusPath = Join-Path $FB.Run 'status.txt'
-    if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) { return $false }
-    foreach ($line in Get-Content -LiteralPath $statusPath) {
-        if ($line -match ' W1 INFO drive-terminal$') { return $true }
-    }
-    return $false
+    return [bool]$FB.DriveTerminal
 }
 
 function Write-FbManifestFacts {
@@ -1041,6 +1159,7 @@ function Invoke-FbW5 {
     if (-not $FB.Tier2On) { return 'skip' }
     try {
         $processes = Test-FbProcesses
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $terminal = Test-FbW1DriveTerminal
         $variant = 'copy'
         $skipReason = $null
@@ -1059,6 +1178,7 @@ function Invoke-FbW5 {
             return 'stop'
         }
         $result = Wait-FbStep -RunId $runId -TimeoutSec 70
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         Write-FbManifestFacts -Result $result
         $editResult = Get-FbEventFact -Result $result -Name 'result'
         if ($editResult -ceq 'verify_failed') {
@@ -1090,7 +1210,8 @@ function Invoke-FbW5 {
 function Invoke-FbPreview {
     $runId = Start-FbStep -Step 'update-preview'
     if (-not $runId) { return @{ Exit = 1; Class = 'other'; Events = @() } }
-    return Wait-FbStep -RunId $runId -TimeoutSec 320
+    $result = Wait-FbStep -RunId $runId -TimeoutSec 320
+    return $result
 }
 
 function Set-FbPrereadReady {
@@ -1106,22 +1227,26 @@ function Invoke-FbW6 {
         $processes = Test-FbProcesses
         if ($processes.Load) {
             $choice = Wait-FbDecision -Step 'W6' -Reason 'load-running' -Words @('wait','finish-later')
-            if ($choice -cne 'wait') { return 'finish-later' }
+            if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
+            if ($choice -cne 'wait') { Write-FbStatus -Step 'W6' -Code 'SKIP' -Reason 'finish-later'; return 'finish-later' }
             $waitUntil = [DateTime]::UtcNow.AddSeconds((Get-FbScaledSeconds 300))
             while ([DateTime]::UtcNow -lt $waitUntil) {
                 Start-Sleep -Seconds ([Math]::Min((Get-FbScaledSeconds 120), [Math]::Max(1, [int][Math]::Ceiling(($waitUntil - [DateTime]::UtcNow).TotalSeconds))))
                 Write-FbStatus -Step 'W6' -Code 'INFO' -Reason 'heartbeat'
             }
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             $processes = Test-FbProcesses
-            if ($processes.Load) { return 'finish-later' }
+            if ($processes.Load) { Write-FbStatus -Step 'W6' -Code 'SKIP' -Reason 'finish-later'; return 'finish-later' }
         }
 
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $fetchRun = Start-FbStep -Step 'kit-fetch'
         if (-not $fetchRun) {
             Write-FbStatus -Step 'W6' -Code 'STOP' -Reason 'download'
             return 'stop'
         }
         $fetchResult = Wait-FbStep -RunId $fetchRun -TimeoutSec 910
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $fetchReason = Get-FbEventFact -Result $fetchResult -Name 'reason'
         if ($fetchResult.Exit -ne 0 -or $fetchReason -cne 'ok') {
             if ($fetchReason -ceq 'sha') { $stopReason = 'sha' }
@@ -1141,16 +1266,19 @@ function Invoke-FbW6 {
                 Write-FbStatus -Step 'W6' -Code 'SKIP' -Reason 'load-running'
                 return 'finish-later'
             }
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             $installRun = Start-FbStep -Step 'kit-install'
             if (-not $installRun) {
                 Write-FbStatus -Step 'W6' -Code 'STOP' -Reason 'install'
                 return 'stop'
             }
             $installResult = Wait-FbStep -RunId $installRun -TimeoutSec 910
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             if ($installResult.Exit -eq 0) { break }
             if ($installResult.Class -ceq 'install-busy' -and $installAttempt -eq 1) {
                 $choice = Wait-FbDecision -Step 'W6' -Reason 'install-busy' -Words @('retry','finish-later')
-                if ($choice -cne 'retry') { return 'finish-later' }
+                if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
+                if ($choice -cne 'retry') { Write-FbStatus -Step 'W6' -Code 'SKIP' -Reason 'finish-later'; return 'finish-later' }
                 continue
             }
             Write-FbStatus -Step 'W6' -Code 'STOP' -Reason 'install'
@@ -1164,6 +1292,7 @@ function Invoke-FbW6 {
             return 'stop'
         }
         $versionResult = Wait-FbStep -RunId $versionRun -TimeoutSec 70
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $version = Read-FbStepLine $versionRun
         if ($versionResult.Exit -ne 0 -or $version -cne [string]$FB.Facts.kit_version) {
             Write-FbStatus -Step 'W6' -Code 'STOP' -Reason 'version'
@@ -1173,6 +1302,7 @@ function Invoke-FbW6 {
 
         if ($FB.DomainPresent) {
             $preview = Invoke-FbPreview
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             if ($preview.Class -ceq 'preview-ready' -and $preview.Exit -eq 0) {
                 Write-FbStatus -Step 'W6' -Code 'INFO' -Reason 'payload-proven'
                 Set-FbPrereadReady
@@ -1223,7 +1353,6 @@ function Write-FbW7Failed {
             'complete-yn-prompt',
             'complete-verified-line',
             'complete-retry-declined',
-            'complete-dead-live',
             'complete-result',
             'complete-exception'
         )]
@@ -1244,8 +1373,10 @@ function Start-FbW7 {
             else {
                 $prereadRun = Start-FbStep -Step 'health-key' -WithKey
                 if (-not $prereadRun) { $preread = @{ Exit = 1; Class = 'other'; Events = @() } }
-                else { $preread = Wait-FbStep -RunId $prereadRun -TimeoutSec 320 }
+                else { $preread = Wait-FbStep -RunId $prereadRun -TimeoutSec 320 -AllowKeyVisible }
             }
+            if ($preread.Class -ceq 'key-visible') { return Stop-FbVisibleKey }
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             $readyClass = if ($FB.DomainPresent) { 'preview-ready' } else { 'health-ready' }
             if ($preread.Exit -ne 0 -or $preread.Class -cne $readyClass) {
                 Write-FbStatus -Step 'W7' -Code 'SKIP' -Reason 'queue-not-empty'
@@ -1254,11 +1385,13 @@ function Start-FbW7 {
             Set-FbPrereadReady
         }
 
+        if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
         $runId = Start-FbStep -Step 'update' -WithKey
         if (-not $runId) {
             if ([string]$FB.LastRefusal -match '^update-running(?:\s+([A-Za-z0-9_.:+-]+))?') {
                 $runId = $Matches[1]
                 if (-not $runId) { $runId = Get-FbUpdateRunId }
+                if ($runId -ceq 'unknown') { $runId = $null }
                 if ($runId) {
                     $FB.W7RunId = $runId
                     Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'rejoin'
@@ -1291,11 +1424,15 @@ function Wait-FbW7Run {
     $stage = 0
     $lastLineAt = [DateTime]::UtcNow
     $lastHeartbeat = [DateTime]::UtcNow
+    $staleObservedAt = $null
     $silenceReported = $false
     $pending = $false
     $agentWarning = $false
     $ynPrompt = $false
     while ($true) {
+        # Sample exit.txt before reading events (the supervisor closes events.txt first), so the
+        # final stage lines are never lost when the update ends between the two reads.
+        $exitSeen = Test-Path -LiteralPath $exitPath -PathType Leaf
         if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
             $all = @(Get-Content -LiteralPath $eventsPath)
             if ($all.Count -gt $seen) {
@@ -1326,11 +1463,11 @@ function Wait-FbW7Run {
                 $seen = $all.Count
             }
         }
-        if (Test-Path -LiteralPath $exitPath -PathType Leaf) {
-            $exitLine = (Get-Content -LiteralPath $exitPath -Raw).Trim()
+        if ($exitSeen) {
+            $exitLine = ([string](Get-Content -LiteralPath $exitPath -Raw)).Trim()
             if ($exitLine -match '^EXIT\s+(-?\d+)\s+([a-z0-9-]+)\s+') {
                 return @{
-                    Exit = [int]$Matches[1]
+                    Exit = [int64]$Matches[1]
                     Class = $Matches[2]
                     Events = $events
                     Pending = $pending
@@ -1342,8 +1479,11 @@ function Wait-FbW7Run {
         }
         if (Test-Path -LiteralPath $alivePath -PathType Leaf) {
             if (((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $alivePath).LastWriteTimeUtc).TotalSeconds -gt 60) {
-                return @{ Exit = 1; Class = 'dead'; Events = $events; Pending = $pending; AgentWarning = $agentWarning; YnPrompt = $ynPrompt }
-            }
+                if ($null -eq $staleObservedAt) { $staleObservedAt = [DateTime]::UtcNow }
+                elseif (([DateTime]::UtcNow - $staleObservedAt).TotalSeconds -ge (Get-FbScaledSeconds 30)) {
+                    return @{ Exit = 1; Class = 'dead'; Events = $events; Pending = $pending; AgentWarning = $agentWarning; YnPrompt = $ynPrompt }
+                }
+            } else { $staleObservedAt = $null }
         }
         $threshold = if ($stage -eq 5) { Get-FbScaledSeconds 1320 } else { Get-FbScaledSeconds 900 }
         if (-not $silenceReported -and (([DateTime]::UtcNow - $lastLineAt).TotalSeconds -ge $threshold)) {
@@ -1363,6 +1503,7 @@ function Start-FbW7Retry {
     $attempts = Get-FbProgress -Key 'w7_total_attempts'
     if (-not $attempts) { $attempts = '1' }
     if ([int]$attempts -ge 2) { return $null }
+    if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey); return $null }
     $runId = Start-FbStep -Step 'update' -WithKey
     if (-not $runId) { return $null }
     Set-FbProgress -Key 'w7_total_attempts' -Value ([string]([int]$attempts + 1))
@@ -1376,29 +1517,33 @@ function Read-FbDecisionId {
     param([string]$Word)
     $path = Join-Path $FB.Run 'decision.txt'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
-    $line = (Get-Content -LiteralPath $path -Raw).Trim()
+    $line = ([string](Get-Content -LiteralPath $path -Raw)).Trim()
     if ($line -match ('^' + [regex]::Escape($Word) + '\s+id=([0-9a-f]{6})$')) { return $Matches[1] }
     return $null
 }
 
 function Invoke-FbDeployRecovery {
     $choice = Wait-FbDecision -Step 'W7' -Reason 'update-queued' -Words @('deploy-recover','finish-later')
+    if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
     if ($choice -cne 'deploy-recover') { return 'finish-later' }
     $decisionId = Read-FbDecisionId -Word 'deploy-recover'
     if (-not $decisionId) {
         Write-FbW7Failed -Detail 'recovery-decision-id'
         return 'stop'
     }
+    if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
     $recoverRun = Start-FbStep -Step 'deploy-recover' -WithKey -DecisionId $decisionId
     if (-not $recoverRun) {
         Write-FbW7Failed -Detail 'recovery-start'
         return 'stop'
     }
     $recover = Wait-FbStep -RunId $recoverRun -TimeoutSec 910
+    if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
     if ($recover.Exit -ne 0 -or $recover.Class -cne 'deploy-recovered') {
         Write-FbW7Failed -Detail 'recovery-result'
         return 'stop'
     }
+    Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'recovered'
     return 'stop'
 }
 
@@ -1406,6 +1551,7 @@ function Invoke-FbPostUpdateCopy {
     $copyRun = Start-FbStep -Step 'manifest-edit' -Variant 'copy'
     if (-not $copyRun) { return $false }
     $copyResult = Wait-FbStep -RunId $copyRun -TimeoutSec 70
+    if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey); return $false }
     Write-FbManifestFacts -Result $copyResult
     return $copyResult.Exit -eq 0 -and (Get-FbEventFact -Result $copyResult -Name 'result') -ceq 'pass'
 }
@@ -1424,6 +1570,7 @@ function Complete-FbW7 {
         }
         while ($true) {
             $result = Wait-FbW7Run -RunId $RunId
+            if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             if ($result.Pending) {
                 Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'pending-migration'
                 Set-FbProgress -Key 'w7_result' -Value 'stop'
@@ -1472,14 +1619,15 @@ function Complete-FbW7 {
                 if (-not $RunId) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'second-failure'; return 'stop' }
                 continue
             }
+            if ($result.Class -ceq 'dead' -and (Test-FbProcesses).Update) {
+                Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'rejoin'
+                continue
+            }
             if (@('dead','update-busy','network') -ccontains $result.Class) {
                 $choice = Wait-FbDecision -Step 'W7' -Reason 'update-retry' -Words @('continue','stop')
+                if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
                 if ($choice -cne 'continue') {
                     Write-FbW7Failed -Detail 'complete-retry-declined'
-                    return 'stop'
-                }
-                if ($result.Class -ceq 'dead' -and (Test-FbProcesses).Update) {
-                    Write-FbW7Failed -Detail 'complete-dead-live'
                     return 'stop'
                 }
                 $RunId = Start-FbW7Retry -Reason 'start'
@@ -1517,12 +1665,17 @@ function Invoke-FbW8 {
     }
 
     function Invoke-FbW8Step {
-        param([string]$Name, [string]$Variant = "", [switch]$Safety)
+        param([string]$Name, [string]$Variant = "", [switch]$Safety, [int]$TimeoutSec = 0)
+        if (Test-FbKeyVisible) {
+            [void](Stop-FbVisibleKey)
+            return @{ Exit = 1; Class = "key-visible"; Events = @(); RunId = $null; RealExit = $false }
+        }
         if ($Variant) { $runId = Start-FbStep -Step $Name -Variant $Variant }
         else { $runId = Start-FbStep -Step $Name }
-        if (-not $runId) { return @{ Exit = 3; Class = "refused"; Events = @(); RunId = $null } }
-        $timeout = if ($Safety) { 130 } else { Get-FbW8Remaining }
+        if (-not $runId) { return @{ Exit = 3; Class = "refused"; Events = @(); RunId = $null; RealExit = $false } }
+        $timeout = if ($Safety) { 130 } elseif ($TimeoutSec -gt 0) { $TimeoutSec } else { Get-FbW8Remaining }
         $result = Wait-FbStep -RunId $runId -TimeoutSec $timeout
+        if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey); $result['Class'] = 'key-visible' }
         $result['RunId'] = $runId
         return $result
     }
@@ -1555,7 +1708,7 @@ function Invoke-FbW8 {
     function Confirm-FbW8ConnectExit {
         param($Result)
         if (-not $Result.RunId) { return $false }
-        if ($Result.Class -notin @("timeout", "dead")) { return $true }
+        if ($Result.RealExit -eq $true) { return $true }
         return Stop-FbStep -RunId $Result.RunId
     }
 
@@ -1673,7 +1826,7 @@ function Invoke-FbW8 {
 
         $wallCount = 0
         while ($true) {
-            $connectResult = Invoke-FbW8Step -Name google-connect
+            $connectResult = Invoke-FbW8Step -Name google-connect -TimeoutSec 420
             if ($connectResult.Class -eq "client-id-wall" -and $wallCount -eq 0) {
                 $wallCount = 1
                 continue
@@ -1733,7 +1886,9 @@ function Invoke-FbW8 {
             return (Complete-FbW8Local -Value scopes-all -ReturnValue pass)
         }
 
-        Show-FbLine -Key W8-MISSING -Fill @{ list = Format-FbW8List -Names $missing }
+        if ($missing.Count -gt 0) {
+            Show-FbLine -Key W8-MISSING -Fill @{ list = Format-FbW8List -Names $missing }
+        }
         if ($account -eq "changed") { Show-FbLine -Key W8-OTHER-ACCOUNT }
         $regression = $account -eq "changed"
         foreach ($scope in $missing) {
@@ -1742,8 +1897,11 @@ function Invoke-FbW8 {
         if ($regression) { $default = "restore"; $words = @("restore", "retry") } else { $default = "keep"; $words = @("restore", "keep", "retry") }
         $waitReason = "google-partial"
         if ($account -eq "changed") { $waitReason = "google-account" }
-        $waitSeconds = [Math]::Min(300, (Get-FbW8Remaining))
-        $decision = Wait-FbDecision -Step W8 -Reason $waitReason -Words $words -DefaultAfterSec $waitSeconds -Default $default
+        $decision = Wait-FbDecision -Step W8 -Reason $waitReason -Words $words -DefaultAfterSec 300 -Default $default
+        if ($decision -eq "key-visible") {
+            [void](Stop-FbVisibleKey)
+            return (Complete-FbW8Local -Value key-visible -ReturnValue stop)
+        }
         if ($decision -eq "retry" -and $retryCount -eq 0) {
             $retryCount = 1
             continue
@@ -1765,6 +1923,10 @@ function Invoke-FbW8 {
     }
 }
 
+function Invoke-FbW8Safe {
+    try { [void](Invoke-FbW8) } catch { Write-FbStatus -Step 'W8' -Code 'STOP' -Reason 'check-failed' }
+}
+
 function Invoke-FbWindowMain {
     try {
         Initialize-FbCore
@@ -1784,39 +1946,42 @@ function Invoke-FbWindowMain {
         }
         if ($w1 -ceq 'stop') { [void](Invoke-FbW11); return }
         if (-not $FB.Tier2On -and $FB.W8On) {
-            [void](Invoke-FbW8)
+            [void](Invoke-FbW8Safe)
             [void](Invoke-FbW11)
             return
         }
         if ($w1 -ceq 'finish-later') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
         $w3 = Invoke-FbW3
         if ($w3 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
         if ($FB.PausedChoice -ceq 'deploy-recover') {
+            if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey); [void](Invoke-FbW11); return }
             $recoverRun = Start-FbStep -Step 'deploy-recover' -WithKey -DecisionId $FB.PausedDecisionId
             if ($recoverRun) {
                 $recover = Wait-FbStep -RunId $recoverRun -TimeoutSec 960
-                if ($recover.Exit -ne 0) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed' }
+                if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey) }
+                elseif ($recover.Exit -ne 0) { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed' }
+                else { Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'recovered' }
             } else { Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed' }
             [void](Invoke-FbW11)
             return
         }
         $w4 = Invoke-FbW4
         if ($w4 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
         $w5 = Invoke-FbW5
         if ($w5 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
@@ -1824,11 +1989,11 @@ function Invoke-FbWindowMain {
         if ($w6 -cne 'pass') { [void](Invoke-FbW11); return }
         $w7 = Start-FbW7
         if ($w7 -cne 'pass') {
-            if ($FB.W8On) { [void](Invoke-FbW8) }
+            if ($FB.W8On) { [void](Invoke-FbW8Safe) }
             [void](Invoke-FbW11)
             return
         }
-        if ($FB.W8On) { [void](Invoke-FbW8) }
+        if ($FB.W8On) { [void](Invoke-FbW8Safe) }
         [void](Complete-FbW7 -RunId $FB.W7RunId)
         [void](Invoke-FbW11)
     } catch {

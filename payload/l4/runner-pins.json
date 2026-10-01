@@ -10,14 +10,14 @@
     {
       "name": "finish-window.txt",
       "source": "payload/assembled/finish-window.txt",
-      "bytes": 84918,
-      "sha256": "fc5cc69c95db1dbdc94a9cd8068b11ad092f6ec03e6a5830a31028d7cfe85673"
+      "bytes": 94466,
+      "sha256": "7f31d573ee7d836ce75a7b98c5b620d8d4e7828da316e18f2a17a053ff051a3f"
     },
     {
       "name": "fb-run.mjs",
       "source": "payload/l2b/fb-run.mjs",
-      "bytes": 35104,
-      "sha256": "56950b8d489e6a45f483a0075b1402d829870baa71e7f9f33585f5d8a2116705"
+      "bytes": 36274,
+      "sha256": "dbb19710e6c61edcd14b8b1c853da3387c8bb55686764dbae4764e8a4dd0074c"
     },
     {
       "name": "fb-drive-state.mjs",
@@ -34,8 +34,8 @@
     {
       "name": "fb-kit.mjs",
       "source": "payload/l2a-2/fb-kit.mjs",
-      "bytes": 5717,
-      "sha256": "47d7dfcbdc8107ef15018ce158c73423900503d657094c4be471301a9344976c"
+      "bytes": 5733,
+      "sha256": "cfa9bffff22b432a7780e18b44780dad423bfa79af4ce17421403a995f36fe8d"
     },
     {
       "name": "fb-google.mjs",
@@ -46,8 +46,8 @@
     {
       "name": "phrases.json",
       "source": "payload/assembled/phrases.json",
-      "bytes": 20704,
-      "sha256": "8641cb67637237b5e1f5f9cb8a67627eac6f9e0e94d9a8dcfdc32891e3c03035"
+      "bytes": 21411,
+      "sha256": "2c340fe7e298ac4b3b48258c08a89ca3d3adac59a42f822f506a0f465738c886"
     },
     {
       "name": "facts.json",

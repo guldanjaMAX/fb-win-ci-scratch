@@ -48,6 +48,7 @@ const VARIANTS = Object.freeze({
   "google-scopes": ["pre", "post"],
 });
 const FORBIDDEN_ARG_RE = /^(?:--force|upgrade|rollback|forget|drain|reindex|secrets|token)$/iu;
+const injectedRenameFailures = new Set();
 
 function utc() {
   return new Date().toISOString();
@@ -72,6 +73,17 @@ function readJson(path, limit) {
 function atomicWrite(path, contents, mode = 0o600) {
   const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
   writeFileSync(temp, contents, { encoding: "utf8", mode });
+  if (
+    process.env.FB_TEST_FAIL_HEARTBEAT_RENAME === "1"
+    && basename(path) === "alive.txt"
+    && existsSync(path)
+    && !injectedRenameFailures.has(path)
+  ) {
+    injectedRenameFailures.add(path);
+    const error = new Error("injected heartbeat rename failure");
+    error.code = "FB_TEST_HEARTBEAT_RENAME";
+    throw error;
+  }
   renameSync(temp, path);
 }
 
@@ -149,7 +161,7 @@ function registry(inputs, desktop = null) {
     "kit-install": {
       argv: [
         npmEntry, "install", "--global", "--ignore-scripts", "--no-audit", "--no-fund",
-        "--prefix", inputs.prefix, join(kit, "tgz"),
+        "--prefix", inputs.prefix, join(kit, "brain-installer.tgz"),
       ],
       timeout: 900,
     },
@@ -235,7 +247,7 @@ function assertHealthKey(inputs) {
 }
 
 function assertKitForInstall(inputs) {
-  const path = join(inputs.run, "kit", "tgz");
+  const path = join(inputs.run, "kit", "brain-installer.tgz");
   const expectedBytes = Number(inputs.facts.kit_bytes);
   const expectedSha = String(inputs.facts.kit_sha256 || "");
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || !/^[a-f0-9]{64}$/u.test(expectedSha)) refuse("bad-args");
@@ -306,7 +318,8 @@ function childEnvironment(plan, planPath) {
     env.FB_WINDOW_TEST = "1";
     for (const name of [
       "FB_TEST_HANDSHAKE_DELAY_MS", "FB_TEST_HEARTBEAT_MS",
-      "FB_TEST_PREFLIGHT_DELAY_MS", "FB_TEST_STALE_MS", "FB_TEST_START_POLL_MS",
+      "FB_TEST_FAIL_HEARTBEAT_RENAME", "FB_TEST_PREFLIGHT_DELAY_MS",
+      "FB_TEST_STALE_MS", "FB_TEST_START_POLL_MS",
     ]) {
       if (process.env[name]) env[name] = process.env[name];
     }
@@ -432,6 +445,7 @@ function windowsProcesses() {
     windowsHide: true,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
+    env: buildStepEnvironment(false, process.env, false),
   });
   if (result.status !== 0) refuse("spawn");
   const parsed = JSON.parse(result.stdout || "[]");
@@ -695,8 +709,8 @@ class LineSink {
 }
 
 function endStream(stream) {
-  return new Promise((resolveEnd, rejectEnd) => {
-    stream.once("error", rejectEnd);
+  return new Promise((resolveEnd) => {
+    stream.once("error", resolveEnd);
     stream.end(resolveEnd);
   });
 }
@@ -708,6 +722,7 @@ function killTree(child) {
       windowsHide: true,
       shell: false,
       stdio: "ignore",
+      env: buildStepEnvironment(false, process.env, false),
     });
   } else {
     try { process.kill(-child.pid, "SIGKILL"); } catch {}
@@ -777,6 +792,8 @@ async function childCommand(runid) {
 
   const output = createWriteStream(join(plan.folder, "out.log"), { flags: "a", encoding: "utf8", mode: 0o600 });
   const events = createWriteStream(join(plan.folder, "events.txt"), { flags: "a", encoding: "utf8", mode: 0o600 });
+  output.on("error", () => {});
+  events.on("error", () => {});
   const exactKey = plan.key ? String(process.env.CLOUDFLARE_API_TOKEN || "") : "";
   const table = readJson(plan.phrasesPath, 1024 * 1024);
   const classifier = new Classifier(plan.step, table, (line) => events.write(line), exactKey, plan.scriptStep);
@@ -808,26 +825,46 @@ async function childCommand(runid) {
       env: stepEnv,
       detached: false,
     });
-    atomicWrite(join(plan.folder, "meta.txt"), [
-      `step=${plan.step}`,
-      `attempt=${plan.attempt}`,
-      `started=${plan.started}`,
-      `child_pid=${process.pid}`,
-      `child_start=${childStart}`,
-      `step_pid=${child.pid}`,
-      "",
-    ].join("\n"));
   } catch {
     child = null;
+  }
+  if (child) {
+    try {
+      atomicWrite(join(plan.folder, "meta.txt"), [
+        `step=${plan.step}`,
+        `attempt=${plan.attempt}`,
+        `started=${plan.started}`,
+        `child_pid=${process.pid}`,
+        `child_start=${childStart}`,
+        `step_pid=${child.pid}`,
+        "",
+      ].join("\n"));
+    } catch {}
   }
 
   let code = 1;
   if (child) {
+    child.stdout.on("error", () => {
+      try { appendTrace(plan.session, "stdout-read-failed"); } catch {}
+    });
+    child.stderr.on("error", () => {
+      try { appendTrace(plan.session, "stderr-read-failed"); } catch {}
+    });
     child.stdout.on("data", (chunk) => stdoutSink.push(stdoutDecoder.decode(chunk, { stream: true })));
     child.stderr.on("data", (chunk) => stderrSink.push(stderrDecoder.decode(chunk, { stream: true })));
     const heartbeatMs = plan.test ? Number(process.env.FB_TEST_HEARTBEAT_MS || 40) : 10_000;
-    const heartbeat = setInterval(() => atomicWrite(join(plan.folder, "alive.txt"), `${utc()}\n`), heartbeatMs);
-    atomicWrite(join(plan.folder, "alive.txt"), `${utc()}\n`);
+    const writeHeartbeat = () => {
+      try {
+        atomicWrite(join(plan.folder, "alive.txt"), `${utc()}\n`);
+      } catch (error) {
+        try {
+          if (error?.code === "FB_TEST_HEARTBEAT_RENAME") appendTrace(plan.session, "injected-heartbeat-rename-failure");
+          appendTrace(plan.session, "heartbeat-write-failed");
+        } catch {}
+      }
+    };
+    const heartbeat = setInterval(writeHeartbeat, heartbeatMs);
+    writeHeartbeat();
     let timer = null;
     if (plan.timeoutSeconds !== null) {
       timer = setTimeout(() => killTree(child), Number(plan.timeoutSeconds) * 1000);
@@ -936,7 +973,7 @@ async function cancelCommand(argv) {
     if (!alive) { exited = true; break; }
     await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   }
-  if (!exited && process.platform !== "win32") {
+  if (!exited) {
     console.log("REFUSED still-running");
     process.exitCode = 3;
     return;

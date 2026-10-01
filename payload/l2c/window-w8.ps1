@@ -19,12 +19,17 @@ function Invoke-FbW8 {
     }
 
     function Invoke-FbW8Step {
-        param([string]$Name, [string]$Variant = "", [switch]$Safety)
+        param([string]$Name, [string]$Variant = "", [switch]$Safety, [int]$TimeoutSec = 0)
+        if (Test-FbKeyVisible) {
+            [void](Stop-FbVisibleKey)
+            return @{ Exit = 1; Class = "key-visible"; Events = @(); RunId = $null; RealExit = $false }
+        }
         if ($Variant) { $runId = Start-FbStep -Step $Name -Variant $Variant }
         else { $runId = Start-FbStep -Step $Name }
-        if (-not $runId) { return @{ Exit = 3; Class = "refused"; Events = @(); RunId = $null } }
-        $timeout = if ($Safety) { 130 } else { Get-FbW8Remaining }
+        if (-not $runId) { return @{ Exit = 3; Class = "refused"; Events = @(); RunId = $null; RealExit = $false } }
+        $timeout = if ($Safety) { 130 } elseif ($TimeoutSec -gt 0) { $TimeoutSec } else { Get-FbW8Remaining }
         $result = Wait-FbStep -RunId $runId -TimeoutSec $timeout
+        if (Test-FbKeyVisible) { [void](Stop-FbVisibleKey); $result['Class'] = 'key-visible' }
         $result['RunId'] = $runId
         return $result
     }
@@ -57,7 +62,7 @@ function Invoke-FbW8 {
     function Confirm-FbW8ConnectExit {
         param($Result)
         if (-not $Result.RunId) { return $false }
-        if ($Result.Class -notin @("timeout", "dead")) { return $true }
+        if ($Result.RealExit -eq $true) { return $true }
         return Stop-FbStep -RunId $Result.RunId
     }
 
@@ -175,7 +180,7 @@ function Invoke-FbW8 {
 
         $wallCount = 0
         while ($true) {
-            $connectResult = Invoke-FbW8Step -Name google-connect
+            $connectResult = Invoke-FbW8Step -Name google-connect -TimeoutSec 420
             if ($connectResult.Class -eq "client-id-wall" -and $wallCount -eq 0) {
                 $wallCount = 1
                 continue
@@ -235,7 +240,9 @@ function Invoke-FbW8 {
             return (Complete-FbW8Local -Value scopes-all -ReturnValue pass)
         }
 
-        Show-FbLine -Key W8-MISSING -Fill @{ list = Format-FbW8List -Names $missing }
+        if ($missing.Count -gt 0) {
+            Show-FbLine -Key W8-MISSING -Fill @{ list = Format-FbW8List -Names $missing }
+        }
         if ($account -eq "changed") { Show-FbLine -Key W8-OTHER-ACCOUNT }
         $regression = $account -eq "changed"
         foreach ($scope in $missing) {
@@ -244,8 +251,11 @@ function Invoke-FbW8 {
         if ($regression) { $default = "restore"; $words = @("restore", "retry") } else { $default = "keep"; $words = @("restore", "keep", "retry") }
         $waitReason = "google-partial"
         if ($account -eq "changed") { $waitReason = "google-account" }
-        $waitSeconds = [Math]::Min(300, (Get-FbW8Remaining))
-        $decision = Wait-FbDecision -Step W8 -Reason $waitReason -Words $words -DefaultAfterSec $waitSeconds -Default $default
+        $decision = Wait-FbDecision -Step W8 -Reason $waitReason -Words $words -DefaultAfterSec 300 -Default $default
+        if ($decision -eq "key-visible") {
+            [void](Stop-FbVisibleKey)
+            return (Complete-FbW8Local -Value key-visible -ReturnValue stop)
+        }
         if ($decision -eq "retry" -and $retryCount -eq 0) {
             $retryCount = 1
             continue

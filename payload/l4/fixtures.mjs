@@ -83,6 +83,18 @@ export function makeFakeNode(root) {
   return { nodeDir, executable, npmCli: join(npmDir, "npm-cli.js") };
 }
 
+export function makeRealNode(root) {
+  const nodeDir = join(root, "real node runtime");
+  const executable = join(nodeDir, process.platform === "win32" ? "node.exe" : "node-copy");
+  const npmSource = join(dirname(process.execPath), "node_modules", "npm");
+  const npmRoot = join(nodeDir, "node_modules", "npm");
+  mkdirSync(nodeDir, { recursive: true });
+  copyFileSync(process.execPath, executable);
+  chmodSync(executable, 0o755);
+  cpSync(npmSource, npmRoot, { recursive: true });
+  return { nodeDir, executable, npmCli: join(npmRoot, "bin", "npm-cli.js") };
+}
+
 export function makeKit(run) {
   const kitDir = join(run, "kit");
   mkdirSync(kitDir, { recursive: true });

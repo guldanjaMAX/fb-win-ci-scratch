@@ -18,6 +18,9 @@ test("artifact keeps bounded review evidence and excludes executables and kits",
   writeFileSync(join(arm, "status.txt"), "status\n");
   writeFileSync(join(arm, "decision.txt"), "decision\n");
   writeFileSync(join(arm, "w7-detail.txt"), "detail\n");
+  writeFileSync(join(arm, "real-npm.json"), "{}\n");
+  writeFileSync(join(arm, "window-close.json"), "{}\n");
+  writeFileSync(join(arm, "task-end.json"), "{}\n");
   for (const name of ["exit.txt", "meta.txt", "events.txt"]) writeFileSync(join(step, name), `${name}\n`);
   writeFileSync(join(step, "out.log"), "x".repeat(70 * 1024));
   writeFileSync(join(step, "node.exe"), "never-copy\n");
@@ -29,6 +32,9 @@ test("artifact keeps bounded review evidence and excludes executables and kits",
   assert.equal(statSync(join(output, "l4-results", "A0", "real-session", "session", "run", "steps", "update-fixture", "out.log")).size, 64 * 1024);
   assert.equal(existsSync(join(output, "l4-results", "A0", "real-session", "session", "run", "steps", "update-fixture", "node.exe")), false);
   assert.equal(existsSync(join(output, "l4-results", "A0", "real-session", "session", "run", "kit.tgz")), false);
+  for (const name of ["real-npm.json", "window-close.json", "task-end.json"]) {
+    assert.equal(existsSync(join(output, "l4-results", "A0", "real-session", "session", "run", name)), true);
+  }
 });
 
 test("workflow grants the real-window lane enough time and uploads only the slim tree", () => {

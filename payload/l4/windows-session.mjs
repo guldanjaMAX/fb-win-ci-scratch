@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   utimesSync,
@@ -12,10 +13,11 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { armMap } from "./reference/arms.mjs";
 import { canonical } from "./reference/oracle.mjs";
-import { freshKey, installStub, makeFakeNode, makeSession, scenarioForSessionHelpers, scenarioForSupervisorArgv, splitCanaries } from "./fixtures.mjs";
+import { freshKey, installStub, makeFakeNode, makeRealNode, makeSession, scenarioForSessionHelpers, scenarioForSupervisorArgv, splitCanaries } from "./fixtures.mjs";
 import { silentExpectedStubCalls } from "./real-session-evidence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -128,7 +130,12 @@ function w8Plan(id) {
     facts("google-discard", { discard: "yes" }), ...finish];
 }
 
-const PUBLISHED_KIT = { bytes: 6668013, sha256: "0555ad1972d7f8d6c1ded78a9fc4265f873cc4f4ce8c11fd04198cc5599409b2" };
+const PUBLISHED_KIT = {
+  url: "https://financialbrain.ai/kit/brain-installer-0.4.9-0555ad1972d7f8d6.tgz",
+  bytes: 6668013,
+  sha256: "0555ad1972d7f8d6c1ded78a9fc4265f873cc4f4ce8c11fd04198cc5599409b2",
+  runtimeSha256: "462d31da0b249cfaa74bb509fa8c7fd5b6a44624597f11536a652a9d2fcd46f6",
+};
 
 function planFor(id, processesPath) {
   const plan = { tier2: true, w8: false, history: false, cloud: false, sequence: [], decisions: {}, processes: [], processes_path: processesPath };
@@ -271,6 +278,219 @@ async function wait(ms) {
   await new Promise((resolveWait) => setTimeout(resolveWait, ms));
 }
 
+function runQuiet(command, args, options = {}) {
+  return spawnSync(command, args, {
+    encoding: "utf8",
+    windowsHide: true,
+    shell: false,
+    stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    ...options,
+  });
+}
+
+function killProcessTree(pid) {
+  if (!Number.isInteger(Number(pid)) || Number(pid) < 1) return false;
+  const result = runQuiet("taskkill.exe", ["/PID", String(pid), "/T", "/F"]);
+  return result.status === 0 || /not found|no running instance/iu.test(`${result.stdout}\n${result.stderr}`);
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntil(probe, timeoutMs, intervalMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const value = probe();
+    if (value) return value;
+    await wait(intervalMs);
+  }
+  return null;
+}
+
+function copyServedFiles(runnerDir, session) {
+  for (const name of served) copyFileSync(join(resolve(runnerDir), name), join(session, name));
+}
+
+function sessionEnvironment(root, fixture, nodeDir) {
+  const temp = join(root, "temp");
+  mkdirSync(temp, { recursive: true });
+  const env = {
+    ...process.env,
+    PATH: `${nodeDir};${process.env.PATH || ""}`,
+    HOME: fixture.home,
+    USERPROFILE: fixture.home,
+    LOCALAPPDATA: fixture.local,
+    TEMP: temp,
+    TMP: temp,
+    TMPDIR: temp,
+    BRAIN_NO_WRANGLER_LOGIN: "1",
+  };
+  delete env.FB_WINDOW_TEST;
+  for (const name of Object.keys(env)) if (name.startsWith("FB_TEST_")) delete env[name];
+  return env;
+}
+
+function launchWindowBridge({ args, fixture, root, env, testMode = "off", windowPath = join(fixture.session, "finish-window.txt"), windowSha = args.expectedWindowSha256 }) {
+  return spawn("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(here, "windows-bridge.ps1"),
+    "-RunnerDir", resolve(args.runnerDir), "-SessionDir", fixture.session, "-WindowPath", windowPath,
+    "-ExpectedWindowSha256", windowSha, "-ReceiptPath", join(fixture.run, "bridge.json"), "-TestMode", testMode,
+  ], { cwd: fixture.session, env, windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+}
+
+function registryExport(key, path) {
+  const result = runQuiet("reg.exe", ["export", key, path, "/y"]);
+  return result.status === 0;
+}
+
+function registryDelete(key) {
+  runQuiet("reg.exe", ["delete", key, "/f"]);
+}
+
+function snapshotRegistry(root) {
+  const folder = join(root, "registry-snapshot");
+  mkdirSync(folder, { recursive: true });
+  const keys = [
+    { name: "history", key: "HKCU\\Software\\Microsoft\\Clipboard", path: join(folder, "history.reg") },
+    { name: "policy", key: "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\System", path: join(folder, "policy.reg") },
+  ];
+  for (const item of keys) item.existed = registryExport(item.key, item.path);
+  return { folder, keys };
+}
+
+function applyRegistryArm(snapshot, mode) {
+  for (const item of snapshot.keys) registryDelete(item.key);
+  const history = snapshot.keys.find((item) => item.name === "history").key;
+  const policy = snapshot.keys.find((item) => item.name === "policy").key;
+  const enabled = mode === "history-on" ? "1" : "0";
+  const historyWrite = runQuiet("reg.exe", ["add", history, "/v", "EnableClipboardHistory", "/t", "REG_DWORD", "/d", enabled, "/f"]);
+  if (historyWrite.status !== 0) throw new Error("registry history setup failed");
+  if (mode === "history-on") {
+    const policyWrite = runQuiet("reg.exe", ["add", policy, "/f"]);
+    if (policyWrite.status !== 0) throw new Error("registry policy setup failed");
+    if (runQuiet("reg.exe", ["query", policy]).status !== 0 ||
+        runQuiet("reg.exe", ["query", policy, "/v", "AllowClipboardHistory"]).status === 0) {
+      throw new Error("registry missing-policy-value setup failed");
+    }
+  } else if (runQuiet("reg.exe", ["query", policy]).status === 0) {
+    throw new Error("registry policy key removal failed");
+  }
+}
+
+function restoreRegistry(snapshot) {
+  for (const item of snapshot.keys) registryDelete(item.key);
+  for (const item of snapshot.keys) {
+    if (!item.existed) continue;
+    const imported = runQuiet("reg.exe", ["import", item.path]);
+    if (imported.status !== 0) return false;
+  }
+  for (const item of snapshot.keys) {
+    if (!item.existed) {
+      if (runQuiet("reg.exe", ["query", item.key]).status === 0) return false;
+      continue;
+    }
+    const verifyPath = join(snapshot.folder, `${item.name}-verify.reg`);
+    if (!registryExport(item.key, verifyPath)) return false;
+    if (!readFileSync(verifyPath).equals(readFileSync(item.path))) return false;
+  }
+  return true;
+}
+
+function writeWindowDpapiKey(localRoot, key) {
+  const folder = join(localRoot, "FinancialBrain");
+  const target = join(folder, "update-key.dpapi");
+  mkdirSync(folder, { recursive: true });
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "$plain=[Console]::In.ReadToEnd()",
+    "$secure=ConvertTo-SecureString $plain -AsPlainText -Force",
+    "$protected=ConvertFrom-SecureString $secure",
+    "[IO.File]::WriteAllText($args[0],($protected+[char]10),(New-Object Text.UTF8Encoding($false)))",
+    "$secure.Dispose()",
+  ].join(";");
+  const result = runQuiet("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, target], { input: key });
+  if (result.status !== 0 || !existsSync(target)) throw new Error("fixture key protection failed");
+  return target;
+}
+
+function installRealCliSafetyWrapper(fixture) {
+  const packageDir = join(fixture.prefix, "node_modules", "brain-installer");
+  const cli = join(packageDir, "brain.mjs");
+  const real = join(packageDir, "brain-real.mjs");
+  if (!existsSync(cli) || existsSync(real)) return false;
+  renameSync(cli, real);
+  const wrapper = String.raw`import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+const here = dirname(fileURLToPath(import.meta.url));
+const receiptPath = resolve(process.cwd(), "run", "real-npm.json");
+const readReceipt = () => {
+  try { return JSON.parse(readFileSync(receiptPath, "utf8")); } catch { return { blocked_commands: [] }; }
+};
+const writeReceipt = (value) => writeFileSync(receiptPath, JSON.stringify(value, null, 2) + "\n", "utf8");
+const argv = process.argv.slice(2);
+if (argv.length === 1 && argv[0] === "--version") {
+  const child = spawnSync(process.execPath, [resolve(here, "brain-real.mjs"), "--version"], { encoding: "utf8", windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+  process.stdout.write(child.stdout || "");
+  process.stderr.write(child.stderr || "");
+  writeReceipt({ ...readReceipt(), version_delegate_exit: child.status, version_match: (child.stdout || "").trim() === "0.4.9" });
+  process.exit(child.status ?? 1);
+}
+if (argv[0] === "update" && argv.includes("--preview") && argv.includes("--json")) {
+  writeFileSync(resolve(process.cwd(), "run", "decision.txt"), "key-visible\n", "ascii");
+  writeReceipt({ ...readReceipt(), preview_safety: true });
+  process.stdout.write('{"pre_update_check_complete": true,\n"projection_ready": true}\n');
+  process.exit(0);
+}
+const receipt = readReceipt();
+receipt.blocked_commands = [...new Set([...(receipt.blocked_commands || []), String(argv[0] || "none")])];
+writeReceipt(receipt);
+process.stderr.write("fixture safety refusal\n");
+process.exit(9);
+`;
+  writeFileSync(cli, wrapper, "utf8");
+  return true;
+}
+
+function stepFolders(session, step) {
+  const root = join(session, "run", "steps");
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter((name) => name.startsWith(`${step}-`)).map((name) => join(root, name));
+}
+
+function stepExit(session, step) {
+  for (const folder of stepFolders(session, step)) {
+    const path = join(folder, "exit.txt");
+    if (existsSync(path)) return { folder, line: readFileSync(path, "utf8").trim() };
+  }
+  return null;
+}
+
+function readMetaPid(folder) {
+  const match = /^child_pid=(\d+)$/mu.exec(readFileSync(join(folder, "meta.txt"), "utf8"));
+  return match ? Number(match[1]) : null;
+}
+
+function harnessVoidState(fixture) {
+  const callsPath = join(fixture.prefix, "stub-calls.jsonl");
+  const calls = existsSync(callsPath) ? readCalls(callsPath) : [];
+  const silent = silentExpectedStubCalls(calls);
+  const empty = emptyExpectedStubSteps(fixture.session);
+  return { void: silent.length > 0 || empty.length > 0, silent: silent.map((call) => call.command), empty };
+}
+
+function writeSpecialResult(result) {
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  process.exitCode = ["pass", "skip"].includes(result.status) ? 0 : 1;
+}
+
 async function probeHelperGate(session) {
   const helperPath = join(session, "fb-win.mjs");
   const helperBytes = readFileSync(join(session, "facts.json"));
@@ -349,6 +569,437 @@ async function driveWindow({ child, session, plan, key, desktop }) {
   return { timedOut: Date.now() >= deadline, decisions: decided.size };
 }
 
+function initializeSpecialFixture(args, root, { realNode = false } = {}) {
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  const fixture = makeSession(root, { tier2: true, marker: "tier2\n" });
+  copyServedFiles(args.runnerDir, fixture.session);
+  rmSync(join(fixture.session, "fb-test-seam.marker"), { force: true });
+  const node = realNode ? makeRealNode(fixture.prefix) : makeFakeNode(fixture.prefix);
+  const key = freshKey();
+  installStub(fixture.prefix, { version: "0.4.9", right_key_sha256: sha256(key), commands: {} });
+  writeJson(join(fixture.prefix, "scenario.json"), scenarioForSupervisorArgv([ready(), keyOk()], key));
+  writeJson(join(fixture.manifestDir, ".brain-ingest-drive.json"), {
+    done: { fixture: {} }, skipped: {}, removed: {}, drive_last_full_sweep_at: "2099-01-01T00:00:00.000Z",
+  });
+  mkdirSync(join(fixture.home, "Desktop"), { recursive: true });
+  return { fixture, node, key, env: sessionEnvironment(root, fixture, node.nodeDir) };
+}
+
+function bridgeReceipt(fixture) {
+  const path = join(fixture.run, "bridge.json");
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
+}
+
+async function stopBridge(child) {
+  if (child?.pid) killProcessTree(child.pid);
+  await waitUntil(() => child?.exitCode !== null, 10_000, 50);
+}
+
+async function runRegistryArm(args, spec) {
+  const root = resolve(args.sessionRoot);
+  const { fixture, node, key, env } = initializeSpecialFixture(args, root);
+  const snapshot = snapshotRegistry(root);
+  const mode = args.arm === "R-REG" ? "history-on" : "history-off";
+  let child = null;
+  let restored = false;
+  let actualStatus = [];
+  let receipt = null;
+  try {
+    applyRegistryArm(snapshot, mode);
+    child = launchWindowBridge({ args, fixture, root, env, testMode: "off" });
+    child.stdout.resume();
+    child.stderr.resume();
+    const target = spec.statuses[0];
+    await waitUntil(() => {
+      actualStatus = lines(join(fixture.run, "status.txt"));
+      return actualStatus.some((line) => canonical(line) === target);
+    }, 120_000, 50);
+    receipt = bridgeReceipt(fixture);
+  } finally {
+    await stopBridge(child);
+    restored = restoreRegistry(snapshot);
+  }
+  actualStatus = lines(join(fixture.run, "status.txt"));
+  const projected = projectStatus(actualStatus, spec.statuses);
+  const voidState = harnessVoidState(fixture);
+  const leaks = leakCounts(fixture.session, { key, ...fixture.canaries });
+  const realRead = projected.complete && !actualStatus.some((line) => / RUN INFO test-seam-on$/u.test(line));
+  const reached = !voidState.void && projected.complete && Boolean(receipt?.pass) && realRead && restored;
+  writeSpecialResult({
+    arm: args.arm,
+    id: args.arm,
+    target: "windows",
+    status: voidState.void ? "void" : reached ? "pass" : "fail",
+    host_limited: false,
+    decision_point: { required: spec.point, reached, source: "session", evidence: `status=${actualStatus.length} registry=real restored=${restored}` },
+    status_lines: projected.lines,
+    calls: [],
+    stub_call_count: stepMetaCalls(fixture.session).length,
+    leak_scan_counts: leaks,
+    meta: {
+      sessionEvidence: true,
+      bridge: receipt,
+      actualStatusCount: actualStatus.length,
+      harnessVoid: voidState.void,
+      emptyExpectedStubCalls: voidState.silent,
+      emptyExpectedStubSteps: voidState.empty,
+      registryRead: realRead ? "real" : "unproved",
+      registryRestored: restored,
+      nodeUnderSelectedPrefix: node.executable.startsWith(fixture.prefix),
+    },
+  });
+}
+
+async function listenCloudflareGuard() {
+  let connections = 0;
+  const server = createServer((socket) => {
+    connections += 1;
+    socket.destroy();
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(443, "127.0.0.1", resolveListen);
+  });
+  return {
+    count: () => connections,
+    close: () => new Promise((resolveClose) => server.close(resolveClose)),
+  };
+}
+
+function installHostsGuard() {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR;
+  if (!systemRoot) throw new Error("system root unavailable");
+  const path = join(systemRoot, "System32", "drivers", "etc", "hosts");
+  const before = readFileSync(path);
+  const separator = before.length > 0 && before.at(-1) !== 10 ? "\r\n" : "";
+  writeFileSync(path, Buffer.concat([before, Buffer.from(`${separator}127.0.0.1 api.cloudflare.com # r-npm-guard\r\n`, "ascii")]));
+  return {
+    restore() {
+      writeFileSync(path, before);
+      return readFileSync(path).equals(before);
+    },
+  };
+}
+
+async function runRealNpmArm(args, spec) {
+  const root = resolve(args.sessionRoot);
+  const { fixture, node, key, env } = initializeSpecialFixture(args, root, { realNode: true });
+  const sessionFacts = JSON.parse(readFileSync(join(fixture.session, "facts.json"), "utf8"));
+  Object.assign(sessionFacts, {
+    kit_url: PUBLISHED_KIT.url,
+    kit_sha256: PUBLISHED_KIT.sha256,
+    kit_bytes: PUBLISHED_KIT.bytes,
+    kit_version: "0.4.9",
+    runtime_payload_sha256: PUBLISHED_KIT.runtimeSha256,
+  });
+  writeJson(join(fixture.session, "facts.json"), sessionFacts);
+  rmSync(join(fixture.run, "kit"), { recursive: true, force: true });
+  writeWindowDpapiKey(fixture.local, key);
+  const registry = snapshotRegistry(root);
+  const cloudflareGuard = await listenCloudflareGuard();
+  let hosts;
+  try {
+    hosts = installHostsGuard();
+  } catch (error) {
+    await cloudflareGuard.close();
+    throw error;
+  }
+  let child = null;
+  let wrapperInstalled = false;
+  let hostsRestored = false;
+  let registryRestored = false;
+  let actualStatus = [];
+  let receipt = null;
+  try {
+    applyRegistryArm(registry, "history-off");
+    child = launchWindowBridge({ args, fixture, root, env, testMode: "off" });
+    child.stdout.resume();
+    child.stderr.resume();
+    const deadline = Date.now() + 25 * 60_000;
+    while (Date.now() < deadline) {
+      actualStatus = lines(join(fixture.run, "status.txt"));
+      if (actualStatus.some((line) => / W1 INFO memory-ok$/u.test(line))) {
+        writeFileSync(join(fixture.run, "desktop-dir.txt"), `${join(fixture.home, "Desktop")}\n`, "utf8");
+      }
+      const install = stepExit(fixture.session, "kit-install");
+      if (!wrapperInstalled && /^EXIT 0 /u.test(install?.line || "")) {
+        wrapperInstalled = installRealCliSafetyWrapper(fixture);
+      }
+      if (actualStatus.some((line) => canonical(line) === spec.statuses[0])) break;
+      if (actualStatus.some((line) => / W6 STOP kit /u.test(line))) break;
+      await wait(20);
+    }
+    receipt = bridgeReceipt(fixture);
+  } finally {
+    await stopBridge(child);
+    for (const call of stepMetaCalls(fixture.session)) {
+      if (call.source !== "step-meta") continue;
+      const folder = stepFolders(fixture.session, call.command === "deploy" ? "deploy-recover" : call.command)[0];
+      if (folder && existsSync(join(folder, "meta.txt"))) killProcessTree(readMetaPid(folder));
+    }
+    await cloudflareGuard.close();
+    hostsRestored = hosts.restore();
+    registryRestored = restoreRegistry(registry);
+  }
+  actualStatus = lines(join(fixture.run, "status.txt"));
+  const projected = projectStatus(actualStatus, spec.statuses);
+  const install = stepExit(fixture.session, "kit-install");
+  const kitPath = join(fixture.run, "kit", "brain-installer.tgz");
+  const exactKit = existsSync(kitPath) && statSync(kitPath).size === PUBLISHED_KIT.bytes && sha256(readFileSync(kitPath)) === PUBLISHED_KIT.sha256;
+  const wrapperReceiptPath = join(fixture.run, "real-npm.json");
+  const wrapperReceipt = existsSync(wrapperReceiptPath) ? JSON.parse(readFileSync(wrapperReceiptPath, "utf8")) : {};
+  const voidState = harnessVoidState(fixture);
+  const leaks = leakCounts(fixture.session, { key, ...fixture.canaries });
+  const writeCommandsStarted = stepMetaCalls(fixture.session).filter((call) => ["update", "deploy"].includes(call.command)).length;
+  const cloudflareConnections = cloudflareGuard.count();
+  const realNpm = /^EXIT 0 /u.test(install?.line || "") && exactKit && wrapperInstalled;
+  const realCliVersion = wrapperReceipt.version_delegate_exit === 0 && wrapperReceipt.version_match === true;
+  const reached = !voidState.void && projected.complete && Boolean(receipt?.pass) && realNpm && realCliVersion &&
+    wrapperReceipt.preview_safety === true && cloudflareConnections === 0 && hostsRestored && registryRestored && writeCommandsStarted === 0;
+  writeSpecialResult({
+    arm: args.arm,
+    id: args.arm,
+    target: "windows",
+    status: voidState.void ? "void" : reached ? "pass" : "fail",
+    host_limited: false,
+    decision_point: { required: spec.point, reached, source: "session", evidence: `status=${actualStatus.length} npm=${realNpm} version=${realCliVersion}` },
+    status_lines: projected.lines,
+    calls: realNpm ? [{ command: "npm-cli.js", key: false }] : [],
+    stub_call_count: stepMetaCalls(fixture.session).length,
+    leak_scan_counts: leaks,
+    meta: {
+      sessionEvidence: true,
+      bridge: receipt,
+      actualStatusCount: actualStatus.length,
+      harnessVoid: voidState.void,
+      emptyExpectedStubCalls: voidState.silent,
+      emptyExpectedStubSteps: voidState.empty,
+      realNpm,
+      realCliVersion,
+      cachedKit: false,
+      cloudflareConnections,
+      hostsRestored,
+      registryRestored,
+      writeCommandsStarted,
+      previewSafety: wrapperReceipt.preview_safety === true,
+      blockedCommands: wrapperReceipt.blocked_commands || [],
+      npmResolution: {
+        nodeUnderSelectedPrefix: node.executable.startsWith(fixture.prefix),
+        entryUnderSelectedPrefix: node.npmCli.startsWith(fixture.prefix),
+        realEntry: true,
+      },
+    },
+  });
+}
+
+function closeWindowSource() {
+  return String.raw`param([Parameter(Mandatory=$true)][string]$SessionDir)
+$ErrorActionPreference = 'Stop'
+$run = Join-Path $SessionDir 'run'
+$utf8 = New-Object Text.UTF8Encoding($false)
+function Status([string]$Step,[string]$Code,[string]$Reason) {
+  $line = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ') + " $Step $Code $Reason" + [char]10
+  [IO.File]::AppendAllText((Join-Path $run 'status.txt'), $line, [Text.Encoding]::ASCII)
+}
+function Quote([string]$Value) {
+  if ($Value -notmatch '[\s"]') { return $Value }
+  return '"' + ($Value -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
+}
+Status 'RUN' 'START' 'start'
+$node = ([IO.File]::ReadAllText((Join-Path $SessionDir 'selected-node-fixture.txt'))).Trim()
+$argv = @((Join-Path $SessionDir 'fb-run.mjs'),'start','update','--session',$SessionDir)
+$psi = New-Object Diagnostics.ProcessStartInfo
+$psi.FileName = $node
+$psi.Arguments = (($argv | ForEach-Object { Quote $_ }) -join ' ')
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.EnvironmentVariables.Clear()
+foreach ($name in @('PATH','PATHEXT','SystemRoot','windir','ComSpec','TEMP','TMP','USERPROFILE','HOMEDRIVE','HOMEPATH','APPDATA','LOCALAPPDATA','USERNAME','USERDOMAIN','ProgramData','ProgramFiles','ProgramFiles(x86)','ALLUSERSPROFILE','PROCESSOR_ARCHITECTURE','NUMBER_OF_PROCESSORS','OS')) {
+  $value = [Environment]::GetEnvironmentVariable($name)
+  if ($null -ne $value) { $psi.EnvironmentVariables[$name] = $value }
+}
+$psi.EnvironmentVariables['BRAIN_NO_WRANGLER_LOGIN'] = '1'
+$psi.EnvironmentVariables['CLOUDFLARE_API_TOKEN'] = ([IO.File]::ReadAllText((Join-Path $SessionDir 'fixture-admin-key.txt'))).Trim()
+$process = New-Object Diagnostics.Process
+$process.StartInfo = $psi
+[void]$process.Start()
+$line = $process.StandardOutput.ReadLine()
+$null = $process.StandardError.ReadToEnd()
+$process.WaitForExit()
+if ($line -notmatch '^RUN update (\S+)$') { throw 'dummy update did not start' }
+[IO.File]::WriteAllText((Join-Path $run 'close-runid.txt'), ($Matches[1] + [char]10), $utf8)
+Status 'W7' 'START' 'start'
+while ($true) { Start-Sleep -Seconds 5 }
+`;
+}
+
+function unregisterTask(taskName) {
+  const escaped = taskName.replaceAll("'", "''");
+  runQuiet("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Unregister-ScheduledTask -TaskName '${escaped}' -Confirm:$false -ErrorAction SilentlyContinue`]);
+}
+
+function stopScheduledTask(taskName) {
+  const escaped = taskName.replaceAll("'", "''");
+  return runQuiet("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Stop-ScheduledTask -TaskName '${escaped}' -ErrorAction Stop`]).status === 0;
+}
+
+async function runCloseSubrun(args, root, action) {
+  const fixture = makeSession(root, { tier2: true, marker: "tier2\n" });
+  rmSync(join(fixture.session, "fb-test-seam.marker"), { force: true });
+  const node = makeFakeNode(fixture.prefix);
+  const key = freshKey();
+  installStub(fixture.prefix, { version: "0.4.9", right_key_sha256: sha256(key), commands: {} });
+  writeJson(join(fixture.prefix, "scenario.json"), scenarioForSupervisorArgv([{
+    label: "update",
+    raw: ["dummy-step-started"],
+    after_delay_raw: ["dummy-step-finished"],
+    delay_ms: 120_000,
+    expect_output: true,
+  }], key));
+  writeFileSync(join(fixture.session, "fixture-admin-key.txt"), `${key}\n`, { encoding: "utf8", mode: 0o600 });
+  writeFileSync(join(fixture.session, "selected-node-fixture.txt"), `${node.executable}\n`, "utf8");
+  const fileBytes = new Map();
+  for (const name of served) fileBytes.set(name, readFileSync(join(resolve(args.runnerDir), name)));
+  fileBytes.set("finish-window.txt", Buffer.from(closeWindowSource(), "utf8"));
+  const facts = JSON.parse(fileBytes.get("facts.json").toString("utf8"));
+  facts.tier2 = "on";
+  facts.w8 = "off";
+  fileBytes.set("facts.json", Buffer.from(`${JSON.stringify(facts, null, 2)}\n`, "utf8"));
+  const pins = Object.fromEntries([...fileBytes].map(([name, bytes]) => [name, { bytes: bytes.length, sha256: sha256(bytes) }]));
+  const helperModule = await import(`${pathToFileURL(join(resolve(args.runnerDir), "fb-win.mjs")).href}?close=${Date.now()}-${action}`);
+  const taskName = `WCI real close ${process.pid} ${action}`;
+  const helperOutput = [];
+  const env = sessionEnvironment(root, fixture, dirname(process.execPath));
+  const helper = await helperModule.createHelper({
+    sessionDir: fixture.session,
+    platform: "win32",
+    baseUrl: "https://example.invalid/real-close",
+    pins,
+    taskName,
+    logonType: "Interactive",
+    env,
+    fetch: async (url) => {
+      const name = basename(new URL(url).pathname);
+      const bytes = fileBytes.get(name);
+      return bytes ? { ok: true, arrayBuffer: async () => bytes } : { ok: false };
+    },
+    output: (line) => helperOutput.push(line),
+  });
+  let windowPid = null;
+  let supervisorPid = null;
+  let stepPid = null;
+  let actionApplied = false;
+  let outcome = "UNKNOWN";
+  let exitWritten = false;
+  let progressFinished = false;
+  let supervisorAliveAfterAction = false;
+  let stepAliveAfterAction = false;
+  try {
+    await helper.start();
+    const runid = await waitUntil(() => lines(join(fixture.run, "close-runid.txt"))[0], 60_000, 100);
+    if (!runid) throw new Error("scheduled window did not start dummy update");
+    const folder = join(fixture.run, "steps", runid);
+    await waitUntil(() => existsSync(join(folder, "meta.txt")) && existsSync(join(folder, "out.log")) && readFileSync(join(folder, "out.log"), "utf8").includes("dummy-step-started"), 30_000, 100);
+    supervisorPid = readMetaPid(folder);
+    const call = await waitUntil(() => {
+      const path = join(fixture.prefix, "stub-calls.jsonl");
+      return existsSync(path) ? readCalls(path).find((item) => item.command === "update") : null;
+    }, 30_000, 100);
+    stepPid = Number(call?.pid) || null;
+    const lock = Object.fromEntries(lines(join(fixture.run, "window.lock")).map((line) => line.split("=", 2)));
+    windowPid = Number(lock.pid) || null;
+    if (!windowPid || !supervisorPid || !stepPid) throw new Error("scheduled process identities missing");
+    actionApplied = action === "window-close"
+      ? runQuiet("taskkill.exe", ["/PID", String(windowPid), "/F"]).status === 0
+      : stopScheduledTask(taskName);
+    if (!actionApplied) throw new Error("scheduled termination action failed");
+    await wait(2_000);
+    supervisorAliveAfterAction = processAlive(supervisorPid);
+    stepAliveAfterAction = processAlive(stepPid);
+
+    let goneSamples = 0;
+    const deadline = Date.now() + 135_000;
+    while (Date.now() < deadline) {
+      const exitPath = join(folder, "exit.txt");
+      const output = existsSync(join(folder, "out.log")) ? readFileSync(join(folder, "out.log"), "utf8") : "";
+      exitWritten = existsSync(exitPath) && /^EXIT 0 /u.test(readFileSync(exitPath, "utf8"));
+      progressFinished = output.includes("dummy-step-finished");
+      if (exitWritten && progressFinished) { outcome = "SURVIVES"; break; }
+      if (!processAlive(supervisorPid) && !processAlive(stepPid)) goneSamples += 1;
+      else goneSamples = 0;
+      if (goneSamples >= 10) { outcome = "KILLED"; break; }
+      await wait(250);
+    }
+    const evidence = actionApplied && ["SURVIVES", "KILLED"].includes(outcome) &&
+      (outcome === "SURVIVES" ? exitWritten && progressFinished : !processAlive(supervisorPid) && !processAlive(stepPid));
+    const record = {
+      action,
+      outcome,
+      evidence,
+      action_applied: actionApplied,
+      supervisor_alive_after_action: supervisorAliveAfterAction,
+      step_alive_after_action: stepAliveAfterAction,
+      supervisor_finished: outcome === "SURVIVES" && exitWritten,
+      step_finished: outcome === "SURVIVES" && progressFinished,
+      exit_written: exitWritten,
+      progress_finished: progressFinished,
+    };
+    writeJson(resolve(root, "..", `${action}.json`), record);
+    return {
+      ...record,
+      statusLines: lines(join(fixture.run, "status.txt")),
+      leaks: leakCounts(fixture.session, { key, ...fixture.canaries }),
+      voidState: harnessVoidState(fixture),
+    };
+  } finally {
+    if (stepPid && processAlive(stepPid)) killProcessTree(stepPid);
+    if (supervisorPid && processAlive(supervisorPid)) killProcessTree(supervisorPid);
+    if (windowPid && processAlive(windowPid)) killProcessTree(windowPid);
+    unregisterTask(taskName);
+  }
+}
+
+async function runCloseArm(args, spec) {
+  const root = resolve(args.sessionRoot);
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  const windowClose = await runCloseSubrun(args, join(root, "window-close"), "window-close");
+  const taskEnd = await runCloseSubrun(args, join(root, "task-end"), "task-end");
+  const projected = projectStatus(windowClose.statusLines, spec.statuses);
+  const voidState = {
+    void: windowClose.voidState.void || taskEnd.voidState.void,
+    silent: [...windowClose.voidState.silent, ...taskEnd.voidState.silent],
+    empty: [...windowClose.voidState.empty, ...taskEnd.voidState.empty],
+  };
+  const leaks = Object.fromEntries(Object.keys(windowClose.leaks).map((key) => [key, windowClose.leaks[key] + taskEnd.leaks[key]]));
+  const reached = !voidState.void && projected.complete && windowClose.evidence && taskEnd.evidence;
+  writeSpecialResult({
+    arm: args.arm,
+    id: args.arm,
+    target: "windows",
+    status: voidState.void ? "void" : reached ? "pass" : "fail",
+    host_limited: false,
+    decision_point: { required: spec.point, reached, source: "session", evidence: `window=${windowClose.outcome} task=${taskEnd.outcome}` },
+    status_lines: projected.lines,
+    calls: [{ command: "update", key: true }, { command: "update", key: true }],
+    stub_call_count: 2,
+    leak_scan_counts: leaks,
+    meta: {
+      sessionEvidence: true,
+      bridge: { pass: true, launched: true, entry: "scheduled-task" },
+      actualStatusCount: windowClose.statusLines.length + taskEnd.statusLines.length,
+      harnessVoid: voidState.void,
+      emptyExpectedStubCalls: voidState.silent,
+      emptyExpectedStubSteps: voidState.empty,
+      windowClose: { outcome: windowClose.outcome, evidence: windowClose.evidence },
+      taskEnd: { outcome: taskEnd.outcome, evidence: taskEnd.evidence },
+    },
+  });
+}
+
 function countsAsCalls(calls, spec) {
   const out = [];
   for (const [command, expected] of Object.entries(spec.calls || {})) {
@@ -364,11 +1015,14 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const spec = armMap.get(args.arm);
   if (!spec) throw new Error("unknown arm");
+  if (args.arm === "R-NPM") return runRealNpmArm(args, spec);
+  if (["R-REG", "R-REG-control"].includes(args.arm)) return runRegistryArm(args, spec);
+  if (args.arm === "R-CLOSE") return runCloseArm(args, spec);
   const root = resolve(args.sessionRoot);
   rmSync(root, { recursive: true, force: true });
   mkdirSync(root, { recursive: true });
   const fixture = makeSession(root, { tier2: true, marker: "tier2\n" });
-  for (const name of served) copyFileSync(join(resolve(args.runnerDir), name), join(fixture.session, name));
+  copyServedFiles(args.runnerDir, fixture.session);
   const fakeNode = makeFakeNode(fixture.prefix);
   let key = freshKey();
   if (args.arm === "A10-nodigit") key = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStT".slice(0, 40);
@@ -413,7 +1067,7 @@ async function main() {
     else rmSync(markerPath, { force: true });
   }
   mkdirSync(join(fixture.run, "kit"), { recursive: true });
-  writeFileSync(join(fixture.run, "kit", "tgz"), kit);
+  writeFileSync(join(fixture.run, "kit", "brain-installer.tgz"), kit);
   writeJson(join(fixture.session, "test-history.json"), { enabled: plan.history, delete_ok: true, remaining_matches: 0 });
   if (plan.shortClipboard || plan.emptyClipboard) writeFileSync(join(fixture.session, "test-clipboard.txt"), "short\n", "utf8");
   else if (plan.twoCopies) writeFileSync(join(fixture.session, "test-clipboard.txt"), `${key} ${"b".repeat(40)}\n`, "utf8");

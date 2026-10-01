@@ -17,7 +17,10 @@ $script:FB = @{
     Tier2On = $false
     W8On = $false
     TestSeam = $false
+    ConsoleHost = 'unknown'
+    QuickEditOff = $false
     KeyReady = $false
+    KeyVisibleStopped = $false
     LastRefusal = $null
     HealthResult = $null
     HealthRead = $false
@@ -28,16 +31,53 @@ $script:FB = @{
     LastDecisionId = $null
     HistoryOn = $false
     CloudClipboardOn = $false
+    DriveTerminal = $false
     W7RunId = $null
 }
 
+function Disable-FbQuickEdit {
+    $FB.ConsoleHost = 'unknown'
+    $FB.QuickEditOff = $false
+    if ($env:WT_SESSION -or $env:TERM_PROGRAM -ceq 'Windows_Terminal') {
+        $FB.ConsoleHost = 'terminal'
+        return
+    }
+    try {
+        $consoleType = $null
+        foreach ($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) {
+            $consoleType = $assembly.GetType('Microsoft.PowerShell.ConsoleControl', $false)
+            if ($null -ne $consoleType) { break }
+        }
+        if ($null -eq $consoleType) { return }
+        $flags = [Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
+        $getHandle = @($consoleType.GetMethods($flags) | Where-Object { $_.Name -ceq 'GetStdHandle' })[0]
+        $getMode = @($consoleType.GetMethods($flags) | Where-Object { $_.Name -ceq 'GetMode' })[0]
+        $setMode = @($consoleType.GetMethods($flags) | Where-Object { $_.Name -ceq 'SetMode' })[0]
+        if ($null -eq $getHandle -or $null -eq $getMode -or $null -eq $setMode) { return }
+        $handle = $getHandle.Invoke($null, @(-10))
+        if ($null -eq $handle -or $handle.IsInvalid) { return }
+        $modeArguments = @($handle, [uint32]0)
+        if (-not [bool]$getMode.Invoke($null, $modeArguments)) { return }
+        $FB.ConsoleHost = 'conhost'
+        $mode = [uint32]$modeArguments[1]
+        $newMode = [uint32]($mode -band (-bnot 0x0040))
+        if ($newMode -eq $mode) { $FB.QuickEditOff = $true; return }
+        $FB.QuickEditOff = [bool]$setMode.Invoke($null, @($handle, $newMode))
+    } catch {
+        $FB.QuickEditOff = $false
+    }
+}
+
 function Initialize-FbCore {
-    $host.UI.RawUI.WindowTitle = 'Financial Brain update'
-    $host.UI.RawUI.BackgroundColor = 'DarkBlue'
-    $host.UI.RawUI.ForegroundColor = 'White'
-    Clear-Host
+    try {
+        $host.UI.RawUI.WindowTitle = 'Financial Brain update'
+        $host.UI.RawUI.BackgroundColor = 'DarkBlue'
+        $host.UI.RawUI.ForegroundColor = 'White'
+        Clear-Host
+    } catch {}
     [IO.Directory]::CreateDirectory($FB.Run) | Out-Null
     [IO.Directory]::CreateDirectory((Join-Path $FB.Run 'steps')) | Out-Null
+    Disable-FbQuickEdit
     $factsPath = Join-Path $FB.Session 'facts.json'
     if (-not (Test-Path -LiteralPath $factsPath -PathType Leaf)) { throw 'facts missing' }
     if ((Get-Item -LiteralPath $factsPath).Length -gt 1MB) { throw 'facts too large' }
@@ -228,7 +268,8 @@ function Wait-FbStep {
     param(
         [Parameter(Mandatory=$true)][string]$RunId,
         [int]$TimeoutSec = 0,
-        [scriptblock]$OnEvent
+        [scriptblock]$OnEvent,
+        [switch]$AllowKeyVisible
     )
     $folder = Join-Path (Join-Path $FB.Run 'steps') $RunId
     $eventsPath = Join-Path $folder 'events.txt'
@@ -239,7 +280,10 @@ function Wait-FbStep {
     $started = [DateTime]::UtcNow
     $lastHeartbeat = $started
     while ($true) {
-        if (Test-FbKeyVisible) { return @{ Exit = 1; Class = 'key-visible'; Events = $events } }
+        if ($AllowKeyVisible -and (Test-FbKeyVisible)) { return @{ Exit = 1; Class = 'key-visible'; Events = $events; RealExit = $false } }
+        # The supervisor closes events.txt before it writes exit.txt, so sample exit.txt BEFORE reading
+        # events: when it already existed, this read holds every event (no lost final fact).
+        $exitSeen = Test-Path -LiteralPath $exitPath -PathType Leaf
         if (Test-Path -LiteralPath $eventsPath -PathType Leaf) {
             $all = @(Get-Content -LiteralPath $eventsPath)
             if ($all.Count -gt $seen) {
@@ -250,20 +294,20 @@ function Wait-FbStep {
                 $seen = $all.Count
             }
         }
-        if (Test-Path -LiteralPath $exitPath -PathType Leaf) {
-            $exitLine = (Get-Content -LiteralPath $exitPath -Raw).Trim()
+        if ($exitSeen) {
+            $exitLine = ([string](Get-Content -LiteralPath $exitPath -Raw)).Trim()
             if ($exitLine -match '^EXIT\s+(-?\d+)\s+([a-z0-9-]+)\s+') {
-                return @{ Exit = [int]$Matches[1]; Class = $Matches[2]; Events = $events }
+                return @{ Exit = [int64]$Matches[1]; Class = $Matches[2]; Events = $events; RealExit = $true }
             }
             throw 'bad step exit'
         }
         if (Test-Path -LiteralPath $alivePath -PathType Leaf) {
             if (((Get-Date).ToUniversalTime() - (Get-Item -LiteralPath $alivePath).LastWriteTimeUtc).TotalSeconds -gt 60) {
-                return @{ Exit = 1; Class = 'dead'; Events = $events }
+                return @{ Exit = 1; Class = 'dead'; Events = $events; RealExit = $false }
             }
         }
         if ($TimeoutSec -gt 0 -and (([DateTime]::UtcNow - $started).TotalSeconds -ge $TimeoutSec)) {
-            return @{ Exit = 1; Class = 'timeout'; Events = $events }
+            return @{ Exit = 1; Class = 'timeout'; Events = $events; RealExit = $false }
         }
         if (([DateTime]::UtcNow - $lastHeartbeat).TotalSeconds -ge (Get-FbScaledSeconds 120)) {
             Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'heartbeat'
@@ -310,7 +354,7 @@ function Get-FbScaledSeconds {
 function Test-FbKeyVisible {
     $decisionPath = Join-Path $FB.Run 'decision.txt'
     if (-not (Test-Path -LiteralPath $decisionPath -PathType Leaf)) { return $false }
-    $line = (Get-Content -LiteralPath $decisionPath -Raw).Trim()
+    $line = ([string](Get-Content -LiteralPath $decisionPath -Raw)).Trim()
     return $line -ceq 'key-visible' -or $line -match '^key-visible\s+id='
 }
 
@@ -327,17 +371,20 @@ function Wait-FbDecision {
     $decisionPath = Join-Path $FB.Run 'decision.txt'
     $started = [DateTime]::UtcNow
     $lastHeartbeat = $started
+    $lastIgnoredLine = $null
     $limit = if ($DefaultAfterSec -gt 0) { Get-FbScaledSeconds $DefaultAfterSec } else { 0 }
     while ($true) {
         if (Test-Path -LiteralPath $decisionPath -PathType Leaf) {
-            $line = (Get-Content -LiteralPath $decisionPath -Raw).Trim()
+            $line = ([string](Get-Content -LiteralPath $decisionPath -Raw)).Trim()
             if ($line -ceq 'key-visible' -or $line -match '^key-visible\s+id=') { return 'key-visible' }
             if ($line -match '^(\S+)\s+id=([0-9a-f]{6})$') {
                 $word = $Matches[1]
                 $foundId = $Matches[2]
                 if ($foundId -ceq $id -and $Words -ccontains $word) { $FB.LastDecisionId = $id; return $word }
-                Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'decision-ignored'
-                Remove-Item -LiteralPath $decisionPath -Force -ErrorAction SilentlyContinue
+                if ($foundId -cne $FB.LastDecisionId -and $line -cne $lastIgnoredLine) {
+                    Write-FbStatus -Step 'RUN' -Code 'INFO' -Reason 'decision-ignored'
+                    $lastIgnoredLine = $line
+                }
             }
         }
         if ($limit -gt 0 -and (([DateTime]::UtcNow - $started).TotalSeconds -ge $limit)) { return $Default }
@@ -404,7 +451,7 @@ function Read-FbStepLine {
     $path = Join-Path (Join-Path (Join-Path $FB.Run 'steps') $RunId) 'out.log'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }
     if ((Get-Item -LiteralPath $path).Length -gt 1MB) { throw 'step output too large' }
-    return (Get-Content -LiteralPath $path -Raw).Trim()
+    return ([string](Get-Content -LiteralPath $path -Raw)).Trim()
 }
 
 function Get-FbEventFact {

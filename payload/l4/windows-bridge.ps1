@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$SessionDir,
     [Parameter(Mandatory=$true)][string]$WindowPath,
     [Parameter(Mandatory=$true)][string]$ExpectedWindowSha256,
-    [Parameter(Mandatory=$true)][string]$ReceiptPath
+    [Parameter(Mandatory=$true)][string]$ReceiptPath,
+    [ValidateSet('on','off')][string]$TestMode = 'on'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,8 @@ $block = [ScriptBlock]::Create($text)
 if ($null -eq $block) { throw 'window parse failed' }
 $priorTest = $env:FB_WINDOW_TEST
 try {
-    $env:FB_WINDOW_TEST = '1'
+    if ($TestMode -ceq 'on') { $env:FB_WINDOW_TEST = '1' }
+    else { Remove-Item Env:FB_WINDOW_TEST -ErrorAction SilentlyContinue }
     $receipt = [ordered]@{
         pass = $true
         ps = '5.1'

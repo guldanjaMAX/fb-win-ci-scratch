@@ -35,6 +35,16 @@
       "priority": 20
     },
     {
+      "id": "health-vectorize-pending",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-pending",
+      "outcome": "failure",
+      "match": "Vectorize has accepted work that is not query-visible yet.",
+      "source": "brain.mjs:3981",
+      "priority": 21
+    },
+    {
       "id": "health-capped",
       "steps": ["health", "health-key"],
       "kind": "class",
@@ -73,6 +83,16 @@
       "match": "this manifest has no saved brain.domain, and no Cloudflare access is available",
       "source": "brain.mjs:3618",
       "priority": 45
+    },
+    {
+      "id": "health-vectorize-paused",
+      "steps": ["health", "health-key"],
+      "kind": "class",
+      "value": "health-paused",
+      "outcome": "failure",
+      "match": "Vectorize has accepted work that is not query-visible yet while this Brain is paused for an update.",
+      "source": "brain.mjs:3976",
+      "priority": 46
     },
     {
       "id": "smart-app-refused",

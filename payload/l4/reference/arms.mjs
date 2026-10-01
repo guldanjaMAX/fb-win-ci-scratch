@@ -4,6 +4,10 @@ const commonDone = ["W7 PASS verified", "W11 INFO key-removed", "W11 DONE done"]
 
 export const armSpecs = [
   { id: "A0", negative: false, point: "update call completed", statuses: ["RUN START start", "W3 WAITING owner copy-key", "W3 PASS key-saved", "W4 PASS queue-zero", ...stageLines, ...commonDone], calls: { update: 1, verify: 1, health: 2, "npm-cli.js": 1 } },
+  { id: "R-NPM", negative: true, point: "real published kit reached payload-proven", statuses: ["W6 INFO payload-proven"], calls: { "npm-cli.js": 1 }, meta: { realNpm: true, realCliVersion: true, cachedKit: false, cloudflareConnections: 0, hostsRestored: true, writeCommandsStarted: 0 } },
+  { id: "R-REG", negative: true, point: "real registry missing-policy-value branch", statuses: ["W1 INFO history-on"], calls: {}, meta: { registryRead: "real", registryRestored: true } },
+  { id: "R-REG-control", negative: false, point: "real registry history-off control", statuses: ["W1 INFO history-off"], calls: {}, meta: { registryRead: "real", registryRestored: true } },
+  { id: "R-CLOSE", negative: false, point: "both scheduled-task termination outcomes recorded", statuses: ["RUN START start", "W7 START start"], calls: { update: 2 }, meta: { windowClose: { outcome: "SURVIVES", evidence: true }, taskEnd: { outcome: "KILLED", evidence: true } } },
   { id: "A0b", negative: false, point: "clipboard-history-off branch", statuses: ["RUN START start", "W1 INFO history-off", "W3 WAITING owner copy-key", "W3 PASS key-saved", "W4 PASS queue-zero", ...stageLines, ...commonDone], calls: { update: 1 } },
   { id: "A1", negative: true, point: "single backlog reading", statuses: ["W4 INFO pending n=121", "W4 INFO projection n=3", "W4 WAITING lead queue id=<id> words=wait,finish-later", "W4 SKIP finish-later"], calls: { health: 1, update: 0 } },
   { id: "A1-wait", negative: true, point: "lead wait decision consumed", statuses: ["W4 INFO pending n=121", "W4 INFO projection n=3", "W4 WAITING lead queue id=<id> words=wait,finish-later", "W4 INFO wait-elapsed", "W4 SKIP finish-later"], calls: { health: 2, update: 0 } },

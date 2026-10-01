@@ -74,10 +74,13 @@ const windowsFunctionSource = armRunnerSource.slice(armRunnerSource.indexOf("fun
 check(!windowsSessionSource.includes("simulateArm(") && !windowsSessionSource.includes("runStubArm("), "Windows session builder never sources evidence from oracle or stub targets");
 check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.includes("runStubArm("), "Windows arm path launches the per-arm session runner");
 check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
+check(["R-NPM", "R-REG", "R-REG-control", "R-CLOSE"].every((id) => armSpecs.some((arm) => arm.id === id)), "four real-path Windows arms are registered");
 check(!windowsSessionSource.includes("fb-test-step.json") && windowsSessionSource.includes("scenarioForSupervisorArgv"), "Windows fixtures use production argv instead of the dropped supervisor test environment");
 check(windowsSessionSource.includes("emptyExpectedStubSteps") && armRunnerSource.includes('result.status = "void"'), "empty expected stub output is preserved as VOID through the arm runner");
 check(windowsSessionSource.includes("makeFakeNode(fixture.prefix)"), "Windows session keeps the selected prefix, fake node, and npm entry on one production resolution path");
 check(windowsSessionSource.includes('join(fixture.prefix, "npm-calls.jsonl")'), "Windows session projects the recording npm call into session evidence");
+check(windowsSessionSource.includes('join(fixture.run, "kit", "brain-installer.tgz")') && !windowsSessionSource.includes('join(fixture.run, "kit", "tgz")'), "every cached-kit fixture uses the post-fix tarball file name");
+check(windowsSessionSource.includes('testMode: "off"') && windowsSessionSource.includes("snapshotRegistry") && windowsSessionSource.includes("runCloseSubrun"), "real arms disable the product seam, restore registry state, and exercise scheduled-task termination");
 
 const scratch = mkdtempSync(join(tmpdir(), "phrase-self-test-"));
 check(expectedRunnerNames().length === 9, "runner bridge pins helper plus eight served files");

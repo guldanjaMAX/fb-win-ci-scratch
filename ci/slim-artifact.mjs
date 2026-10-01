@@ -3,6 +3,7 @@ import { resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const STEP_FILES = new Set(["exit.txt", "meta.txt", "events.txt", "out.log"]);
+const REAL_ARM_FILES = new Set(["real-npm.json", "window-close.json", "task-end.json"]);
 const MAX_STEP_BYTES = 64 * 1024;
 
 function selected(relativePath) {
@@ -10,6 +11,7 @@ function selected(relativePath) {
   const name = parts.at(-1);
   if (parts.length === 1) return true;
   if (name === "result.json" || name === "status.txt") return true;
+  if (REAL_ARM_FILES.has(name)) return true;
   if (/decision.*\.txt$/iu.test(name) || /detail.*\.txt$/iu.test(name)) return true;
   return parts.includes("steps") && STEP_FILES.has(name);
 }
