@@ -289,7 +289,9 @@ function runRegistrationArm(helper, root, cleanup) {
   assert.equal(task.TriggerType, "MSFT_TaskDailyTrigger", "task-trigger-not-daily");
   assert.match(task.StartBoundary, /T08:00:00(?:[.+-]|$)/u, "task-trigger-not-eight");
   assert.equal(task.DaysInterval, 1, "task-trigger-not-every-day");
-  assert.equal(String(task.UserId).toLowerCase(), String(task.ExpectedUser).toLowerCase(), "task-user-not-current");
+  // Task Scheduler reads the principal back without the domain on some hosts; compare the account name.
+  const bareUser = (value) => String(value).toLowerCase().split("\\").pop();
+  assert.equal(bareUser(task.UserId), bareUser(task.ExpectedUser), "task-user-not-current");
   assert.equal(task.LogonType, "Interactive", "task-logon-not-interactive");
   assert.equal(task.RunLevel, "Limited", "task-runlevel-not-limited");
   assert.equal(task.StartWhenAvailable, true, "task-start-when-available-off");
