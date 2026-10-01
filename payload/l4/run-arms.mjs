@@ -37,9 +37,21 @@ function runWindowsArm(arm, runnerDir, armOut) {
     shell: false,
     stdio: ["ignore", "pipe", "pipe"]
   });
-  const line = proc.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
-  if (!line) throw new Error(`windows session produced no result for ${arm}`);
-  const result = JSON.parse(line);
+  const line = (proc.stdout || "").trim().split(/\r?\n/u).filter(Boolean).at(-1);
+  let result = null;
+  try { result = line ? JSON.parse(line) : null; } catch { result = null; }
+  if (!result) {
+    // A crashed session must not abort the remaining arms: record it as a harness VOID with its error tail.
+    const tail = String(proc.stderr || proc.error?.message || "").split(/\r?\n/u).filter(Boolean).slice(-12).join(" | ").slice(0, 1500);
+    writeFileSync(resolve(armOut, "session-crash.txt"), `exit=${proc.status}\n${String(proc.stderr || "").slice(-8000)}\n`);
+    return {
+      arm, target: "windows", status: "void", host_limited: false, host_limit_reason: null,
+      decision_point: { required: "session produced a result", reached: false, evidence: "session-crash", source: "runner" },
+      status_lines: [], calls: [], stub_call_count: 0, leak_scan_counts: {},
+      errors: [`session-crash exit=${proc.status}: ${tail}`],
+      meta: { harnessVoid: true, voidReason: "session-crash", sessionRunnerExit: proc.status, crashTail: tail }
+    };
+  }
   result.meta = { ...result.meta, sessionRunnerExit: proc.status, hostLimit: result.host_limited ? result.host_limit_reason : null };
   const evidence = validateRealSessionEvidence(result);
   result.meta = { ...result.meta, realSessionEvidencePass: evidence.pass, realSessionEvidenceErrors: evidence.errors };

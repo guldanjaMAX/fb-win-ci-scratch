@@ -10,8 +10,8 @@
     {
       "name": "finish-window.txt",
       "source": "payload/assembled/finish-window.txt",
-      "bytes": 94466,
-      "sha256": "7f31d573ee7d836ce75a7b98c5b620d8d4e7828da316e18f2a17a053ff051a3f"
+      "bytes": 94509,
+      "sha256": "c2f7e83e5e08043dbf61d921c675e26e88f7db48095d5ccf012a1cf40d43c5c6"
     },
     {
       "name": "fb-run.mjs",

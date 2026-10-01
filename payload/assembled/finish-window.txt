@@ -753,7 +753,10 @@ function Clear-FbClipboard {
         return $true
     } else {
         for ($attempt = 1; $attempt -le 3; $attempt++) {
-            try { Set-Clipboard -Value ' '; return $true } catch {
+            try {
+                Set-Clipboard -Value ' '
+                return $true
+            } catch {
                 if ($attempt -lt 3) { Start-Sleep -Milliseconds 100 }
             }
         }
