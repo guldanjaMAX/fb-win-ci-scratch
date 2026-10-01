@@ -76,11 +76,13 @@ check(!windowsSessionSource.includes("simulateArm(") && !windowsSessionSource.in
 check(armRunnerSource.includes("windows-session.mjs") && !windowsFunctionSource.includes("runStubArm("), "Windows arm path launches the per-arm session runner");
 check(["PR002", "PR003", "PR004", "PR005", "PR006", "PR008"].every((id) => armSpecs.some((arm) => arm.id === id)), "six fixed-path real-window arms are registered");
 check(["R-NPM", "R-NPM-FOREIGN", "R-REG", "R-REG-control", "R-CLOSE"].every((id) => armSpecs.some((arm) => arm.id === id)), "five real-path Windows arms are registered");
+check(windowsStorePullSource.includes("Stop-ScheduledTask") && windowsStorePullSource.includes("task remained registered"), "store harness cleanup stops a stale running task and proves removal by readback");
 const npmOwnedControl = simulateArm("R-NPM");
 const foreignNpmControl = simulateArm("R-NPM-FOREIGN");
 const missedForeignRefusal = structuredClone(foreignNpmControl);
 missedForeignRefusal.meta.foreignEexist = false;
 check(verifyArm(npmOwnedControl).pass && verifyArm(foreignNpmControl).pass && !verifyArm(missedForeignRefusal).pass, "npm-owned green control passes and the foreign arm cannot pass without its EEXIST decision");
+check(npmOwnedControl.status_lines.some((line) => line.endsWith("W3 STOP key key-visible")) && !npmOwnedControl.status_lines.some((line) => line.endsWith("W6 INFO payload-proven")), "real npm decision ends on the accepted between-step key-visible stop without synthetic preview proof");
 check(!windowsSessionSource.includes("fb-test-step.json") && windowsSessionSource.includes("scenarioForSupervisorArgv"), "Windows fixtures use production argv instead of the dropped supervisor test environment");
 check(windowsSessionSource.includes("emptyExpectedStubSteps") && armRunnerSource.includes('result.status = "void"'), "empty expected stub output is preserved as VOID through the arm runner");
 check(windowsSessionSource.includes("makeFakeNode(fixture.prefix)"), "Windows session keeps the selected prefix, fake node, and npm entry on one production resolution path");

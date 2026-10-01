@@ -415,14 +415,14 @@ function Test-FbProcesses {
         foreach ($row in @($rows)) {
             $command = [string]$row['CommandLine']
             $pidValue = [int]$row['ProcessId']
-            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest)(\s|$)') { $load = $true }
+            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest|custom-api)(\s|$)') { $load = $true }
             if ($command -match '(?i)brain\.mjs"?\s+(update|upgrade|deploy)(\s|$)') { $update = $true; $updatePid = $pidValue }
         }
     } else {
         $rows = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'")
         foreach ($row in $rows) {
             $command = [string]$row.CommandLine
-            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest)(\s|$)') { $load = $true }
+            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest|custom-api)(\s|$)') { $load = $true }
             if ($command -match '(?i)brain\.mjs"?\s+(update|upgrade|deploy)(\s|$)') { $update = $true; $updatePid = [int]$row.ProcessId }
         }
     }

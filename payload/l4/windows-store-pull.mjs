@@ -72,9 +72,14 @@ function quotePowerShell(value) {
 function unregisterTask() {
   const result = runPowerShell(String.raw`$ErrorActionPreference = 'Stop'
 $Task = Get-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
-if ($null -ne $Task) { Unregister-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -Confirm:$false }
+if ($null -ne $Task) {
+  if ([string]$Task.State -eq 'Running') { Stop-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue }
+  Unregister-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -Confirm:$false
+}
+$Remaining = Get-ScheduledTask -TaskName '${quotePowerShell(TASK_NAME)}' -ErrorAction SilentlyContinue
+if ($null -ne $Remaining) { throw 'task remained registered' }
 `);
-  assert.equal(result.status, 0, "task-cleanup-failed");
+  assert.equal(result.status, 0, `task-cleanup-failed status=${result.status} signal=${result.signal ?? "none"} error=${result.error?.code ?? "none"}`);
 }
 
 function taskCount() {

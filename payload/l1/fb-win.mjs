@@ -77,7 +77,7 @@ $Host.UI.RawUI.WindowTitle = '@@TITLE@@'
 $SessionDir = '@@SESSION@@'
 $RunDir = '@@RUN@@'
 [IO.Directory]::CreateDirectory($RunDir) | Out-Null
-$Started = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+$Started = (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
 $Lf = [char]10
 $Lock = "pid=$PID" + $Lf + "start=$Started" + $Lf
 [IO.File]::WriteAllText((Join-Path $RunDir 'window.lock'), $Lock, [Text.Encoding]::ASCII)
@@ -389,7 +389,12 @@ function storePullUnregisterSource(taskName) {
   return String.raw`$ErrorActionPreference = 'Stop'
 $TaskName = '${quotePowerShell(taskName)}'
 $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($null -ne $Task) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+if ($null -ne $Task) {
+  if ([string]$Task.State -eq 'Running') { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
+$Remaining = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($null -ne $Remaining) { throw 'task remained registered' }
 `;
 }
 
@@ -649,7 +654,7 @@ export async function createHelper(options = {}) {
   }
 
   async function unregister() {
-    const source = `$ErrorActionPreference = 'SilentlyContinue'\nUnregister-ScheduledTask -TaskName '${quotePowerShell(taskName)}' -Confirm:$false\n`;
+    const source = `$ErrorActionPreference = 'Stop'\n$Task = Get-ScheduledTask -TaskName '${quotePowerShell(taskName)}' -ErrorAction SilentlyContinue\nif ($null -ne $Task) {\n  if ([string]$Task.State -eq 'Running') { Stop-ScheduledTask -TaskName '${quotePowerShell(taskName)}' -ErrorAction SilentlyContinue }\n  Unregister-ScheduledTask -TaskName '${quotePowerShell(taskName)}' -Confirm:$false\n}\n`;
     invokePowerShell(spawn, env, source);
   }
 

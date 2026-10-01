@@ -48,6 +48,9 @@ test("real npm protects the fixture key without reparsing the apostrophe path", 
 
 test("real npm starts from an npm-owned 0.4.8 package and keeps the foreign-shim control", () => {
   assert.match(arms, /id: "R-NPM"[\s\S]*id: "R-NPM-FOREIGN"/u, "the positive arm precedes its negative control");
+  assert.match(arms, /id: "R-NPM"[^\n]*W6 INFO kit-installed[^\n]*W6 INFO cli-version[^\n]*W3 STOP key key-visible/u,
+    "the owned arm ends at the between-step key-visible stop after install and version proof");
+  assert.doesNotMatch(arms, /id: "R-NPM"[^\n]*payload-proven/u, "an authenticated preview is outside the real npm arm");
   assert.match(source, /name: "brain-installer"[\s\S]*version: "0\.4\.8"/u, "the local baseline package matches the installed predecessor");
   assert.match(source, /const bins = \{[\s\S]*brain: "\.\/brain\.mjs"/u, "the predecessor package owns the primary launcher");
   assert.match(source, /"brain-v048-disposable-deploy"[\s\S]*"brain-v048-disposable-closeout"/u, "the baseline owns every predecessor bin shim");
@@ -58,6 +61,7 @@ test("real npm starts from an npm-owned 0.4.8 package and keeps the foreign-shim
   assert.ok(source.includes("/node_modules[\\\\/]brain-installer[\\\\/]brain\\.mjs/iu"), "the npm shim resolves into the installed package");
   assert.match(source, /const stubVersion = [^\n]*"0\.4\.8"/u, "the installed baseline still serves the W1 version read");
   assert.match(source, /R-NPM-FOREIGN[\s\S]*EEXIST/u, "the foreign shim control requires the observed npm refusal");
+  assert.match(source, /projectStatus\(actualStatus, spec\.statuses\)\.complete/u, "the runner waits for the full arm decision sequence");
   assert.doesNotMatch(source, /npmInstall[^\n]*--force/u);
 });
 

@@ -385,6 +385,17 @@
       "source": "operations/update-preview.mjs:77"
     },
     {
+      "id": "kit-install-eexist",
+      "steps": ["kit-install"],
+      "kind": "class",
+      "value": "install-conflict",
+      "outcome": "failure",
+      "priority": 100,
+      "match": "EEXIST",
+      "source": "provider-text",
+      "why": "npm refused to replace an existing foreign launcher; retrying cannot resolve ownership."
+    },
+    {
       "id": "kit-install-ebusy",
       "steps": ["kit-install"],
       "kind": "class",

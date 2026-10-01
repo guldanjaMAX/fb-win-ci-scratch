@@ -415,14 +415,14 @@ function Test-FbProcesses {
         foreach ($row in @($rows)) {
             $command = [string]$row['CommandLine']
             $pidValue = [int]$row['ProcessId']
-            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest)(\s|$)') { $load = $true }
+            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest|custom-api)(\s|$)') { $load = $true }
             if ($command -match '(?i)brain\.mjs"?\s+(update|upgrade|deploy)(\s|$)') { $update = $true; $updatePid = $pidValue }
         }
     } else {
         $rows = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'")
         foreach ($row in $rows) {
             $command = [string]$row.CommandLine
-            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest)(\s|$)') { $load = $true }
+            if ($command -match '(?i)brain\.mjs"?\s+(load|ingest|custom-api)(\s|$)') { $load = $true }
             if ($command -match '(?i)brain\.mjs"?\s+(update|upgrade|deploy)(\s|$)') { $update = $true; $updatePid = [int]$row.ProcessId }
         }
     }
@@ -1278,6 +1278,10 @@ function Invoke-FbW6 {
             $installResult = Wait-FbStep -RunId $installRun -TimeoutSec 910
             if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             if ($installResult.Exit -eq 0) { break }
+            if ($installResult.Class -ceq 'install-conflict') {
+                Write-FbStatus -Step 'W6' -Code 'STOP' -Reason 'install'
+                return 'stop'
+            }
             if ($installResult.Class -ceq 'install-busy' -and $installAttempt -eq 1) {
                 $choice = Wait-FbDecision -Step 'W6' -Reason 'install-busy' -Words @('retry','finish-later')
                 if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }

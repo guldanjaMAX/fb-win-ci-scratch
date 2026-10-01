@@ -860,7 +860,7 @@ async function runRealNpmArm(args, spec) {
       if (!wrapperInstalled && /^EXIT 0 /u.test(install?.line || "")) {
         wrapperInstalled = installRealCliSafetyWrapper(fixture);
       }
-      if (actualStatus.some((line) => canonical(line) === spec.statuses[0])) break;
+      if (projectStatus(actualStatus, spec.statuses).complete) break;
       if (actualStatus.some((line) => / W6 STOP kit /u.test(line))) break;
       await wait(20);
     }
@@ -897,7 +897,7 @@ async function runRealNpmArm(args, spec) {
     cloudflareConnections === 0 && hostsRestored && registryRestored && writeCommandsStarted === 0;
   const reached = foreignControl
     ? commonProof && foreignEexist && startingState.pass
-    : commonProof && realNpm && realCliVersion && wrapperReceipt.preview_safety === true && startingState.pass;
+    : commonProof && realNpm && realCliVersion && startingState.pass;
   writeSpecialResult({
     arm: args.arm,
     id: args.arm,

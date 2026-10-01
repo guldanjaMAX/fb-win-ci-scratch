@@ -503,7 +503,7 @@ function preflightUpdate(plan) {
     if (/brain\.mjs"?\s+(update|upgrade|deploy)(?:\s|$)/iu.test(command)) {
       return { refusal: "update-running unknown", childStart };
     }
-    if (/brain\.mjs"?\s+(load|ingest)(?:\s|$)/iu.test(command)) {
+    if (/brain\.mjs"?\s+(load|ingest|custom-api)(?:\s|$)/iu.test(command)) {
       return { refusal: "load-running", childStart };
     }
   }
@@ -516,7 +516,7 @@ function preflightKitInstall(plan) {
   const excluded = descendantsOfSelf(processes);
   for (const item of processes) {
     if (excluded.has(Number(item.pid))) continue;
-    if (/brain\.mjs"?\s+(load|ingest)(?:\s|$)/iu.test(String(item.commandLine || ""))) return "load-running";
+    if (/brain\.mjs"?\s+(load|ingest|custom-api)(?:\s|$)/iu.test(String(item.commandLine || ""))) return "load-running";
   }
   return null;
 }

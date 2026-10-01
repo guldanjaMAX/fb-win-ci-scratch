@@ -230,7 +230,9 @@ test("test 15: unschedule removes only the fixed store pull task and is idempote
     assert.equal(calls.length, 1);
     const source = decodeOuterSource(calls[0]);
     assert.match(source, /Get-ScheduledTask/u);
+    assert.match(source, /Stop-ScheduledTask/u);
     assert.match(source, /Unregister-ScheduledTask/u);
+    assert.match(source, /task remained registered/u, "the removal decision includes a readback");
     assert.match(source, new RegExp(taskName, "u"));
     assert.doesNotMatch(source, /Financial Brain update['"]/u);
   } finally {

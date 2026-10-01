@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, win32 } from "node:path";
+import { basename, dirname, join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHelper, fillStub } from "../fb-win.mjs";
 
@@ -66,8 +66,40 @@ Put ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') + ' W11 DONE 
 }
 
 async function unregister(taskName) {
-  const source = `$ErrorActionPreference = 'SilentlyContinue'\nUnregister-ScheduledTask -TaskName '${quoted(taskName)}' -Confirm:$false\n`;
+  const source = `$ErrorActionPreference = 'Stop'\n$Task = Get-ScheduledTask -TaskName '${quoted(taskName)}' -ErrorAction SilentlyContinue\nif ($null -ne $Task) {\n  if ([string]$Task.State -eq 'Running') { Stop-ScheduledTask -TaskName '${quoted(taskName)}' -ErrorAction SilentlyContinue }\n  Unregister-ScheduledTask -TaskName '${quoted(taskName)}' -Confirm:$false\n}\n`;
   runPowerShell(source);
+}
+
+function runHelper(path, cwd) {
+  return spawnSync(process.execPath, [path, "status"], {
+    cwd,
+    encoding: "utf8",
+    env: {
+      SystemRoot: process.env.SystemRoot,
+      WINDIR: process.env.WINDIR,
+      BRAIN_NO_WRANGLER_LOGIN: "1",
+    },
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 20_000,
+    windowsHide: true,
+  });
+}
+
+function shortPath(path) {
+  const command = process.env.ComSpec ?? win32.join(process.env.SystemRoot ?? process.env.WINDIR, "System32", "cmd.exe");
+  const result = spawnSync(command, ["/d", "/s", "/c", `for %I in ("${path}") do @echo %~sI`], {
+    encoding: "utf8", shell: false, stdio: ["ignore", "pipe", "pipe"], timeout: 20_000, windowsHide: true,
+  });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+
+async function assertHelperRan(path, session) {
+  await rm(join(session, "run"), { recursive: true, force: true });
+  const result = runHelper(path, session);
+  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.equal(result.stdout, "Nothing more to run here today.\n");
+  assert.match(await readFile(join(session, "run", "helper.txt"), "ascii"), /^status=RUN\.INFO\.none$/mu);
 }
 
 if (!isWindows) {
@@ -80,6 +112,38 @@ if (!isWindows) {
     assert.equal(win32.isAbsolute(outDir), true);
     await readFile(join(outDir, "ps", "stub.ps1"));
     await readFile(join(outDir, "ps", "register.ps1"));
+  });
+
+  test("the real helper reaches main through runner, copied, junction, apostrophe, and available 8.3 paths", async (t) => {
+    const sourceHelper = fileURLToPath(new URL("../fb-win.mjs", import.meta.url));
+    const runnerRoot = join(dirname(sourceHelper), `.direct-run-probe-${randomBytes(4).toString("hex")}`);
+    const runnerHelper = join(runnerRoot, "fb-win.mjs");
+    const root = await mkdtemp(join(tmpdir(), "fb helper guard "));
+    const session = join(root, "session owner's folder");
+    const helper = join(session, "fb-win.mjs");
+    const junction = join(root, "helper-junction");
+    try {
+      await mkdir(runnerRoot);
+      await copyFile(sourceHelper, runnerHelper);
+      assert.equal(win32.isAbsolute(runnerHelper), true, "the actual runner path is absolute");
+      await assertHelperRan(runnerHelper, runnerRoot);
+
+      await mkdir(session, { recursive: true });
+      await copyFile(sourceHelper, helper);
+      await assertHelperRan(helper, session);
+
+      await symlink(session, junction, "junction");
+      await assertHelperRan(join(junction, "fb-win.mjs"), session);
+
+      const short = shortPath(helper);
+      await t.test("8.3 alias when the runner volume provides one", { skip: !short || short.toLowerCase() === helper.toLowerCase() }, async () => {
+        assert.match(short, /~/u, "the exercised path is an 8.3 alias");
+        await assertHelperRan(short, session);
+      });
+    } finally {
+      await rm(runnerRoot, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("Windows-only scheduler, visible action, stub refusal, and parser proof", { timeout: 180_000 }, async () => {
@@ -143,5 +207,10 @@ if (!isWindows) {
       await unregister(taskName);
       await rm(item.root, { recursive: true, force: true });
     }
+  });
+
+  test("scheduled stub records the process creation time used by liveness", () => {
+    assert.match(fillStub({ sessionDir: "C:\\fixture", runDir: "C:\\fixture\\run", sha256: "0".repeat(64) }),
+      /Get-Process -Id \$PID[^\n]*StartTime\.ToUniversalTime/u);
   });
 }

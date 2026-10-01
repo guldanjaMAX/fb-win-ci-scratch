@@ -132,6 +132,10 @@ function Invoke-FbW6 {
             $installResult = Wait-FbStep -RunId $installRun -TimeoutSec 910
             if (Test-FbKeyVisible) { return Stop-FbVisibleKey }
             if ($installResult.Exit -eq 0) { break }
+            if ($installResult.Class -ceq 'install-conflict') {
+                Write-FbStatus -Step 'W6' -Code 'STOP' -Reason 'install'
+                return 'stop'
+            }
             if ($installResult.Class -ceq 'install-busy' -and $installAttempt -eq 1) {
                 $choice = Wait-FbDecision -Step 'W6' -Reason 'install-busy' -Words @('retry','finish-later')
                 if ($choice -ceq 'key-visible') { return Stop-FbVisibleKey }
