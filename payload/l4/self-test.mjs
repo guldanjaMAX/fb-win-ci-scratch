@@ -7,6 +7,7 @@ import { checkMerged } from "./check-phrases-ci.mjs";
 import { freshKey, installStub, makeFakeNode, makeLargeDriveState, makeSession, scenarioFor } from "./fixtures.mjs";
 import { armSpecs, mutantExpectations } from "./reference/arms.mjs";
 import { canonical, detectSuspect, simulateArm, verifyArm } from "./reference/oracle.mjs";
+import { expectedRunnerNames, verifyRunnerArtifacts } from "./artifact-pins.mjs";
 
 let failures = 0;
 function check(condition, label) {
@@ -46,6 +47,9 @@ check(JSON.stringify(alwaysDonePasses) === JSON.stringify(["A0"]), "always-done 
 check(!detectSuspect(alwaysDone).suspect, "always-done oracle does not trip uniform detector");
 
 const scratch = mkdtempSync(join(tmpdir(), "phrase-self-test-"));
+check(expectedRunnerNames().length === 9, "runner bridge pins helper plus eight served files");
+const pinProbe = verifyRunnerArtifacts(join(scratch, "missing-runner"), { allowMissing: true });
+check(pinProbe.missing.length === 9, "runner bridge identifies every missing pinned input");
 mkdirSync(join(scratch, "kit"));
 writeFileSync(join(scratch, "kit", "sample.mjs"), "zero\nfixed phrase\nlast\n");
 const good = { schema: 1, minimum: 1, entries: [{ id: "real", fragments: ["fixed phrase"], kind: "ok", file: "sample.mjs", line: 2, used_by: "stub" }] };

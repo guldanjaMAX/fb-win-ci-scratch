@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -232,6 +233,16 @@ function assertHealthKey(inputs) {
   if (manifest?.brain?.domain) refuse("bad-args");
 }
 
+function assertKitForInstall(inputs) {
+  const path = join(inputs.run, "kit", "tgz");
+  const expectedBytes = Number(inputs.facts.kit_bytes);
+  const expectedSha = String(inputs.facts.kit_sha256 || "");
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || !/^[a-f0-9]{64}$/u.test(expectedSha)) refuse("bad-args");
+  if (!existsSync(path) || !statSync(path).isFile() || statSync(path).size !== expectedBytes) refuse("bad-args");
+  const actualSha = createHash("sha256").update(readFileSync(path)).digest("hex");
+  if (actualSha !== expectedSha) refuse("bad-args");
+}
+
 function buildPlan(parsed) {
   const inputs = sessionInputs(parsed.session);
   const desktop = readDesktop(inputs, parsed.step === "manifest-edit");
@@ -243,6 +254,7 @@ function buildPlan(parsed) {
   if (parsed.step === "deploy-recover") assertDecision(inputs, parsed.decisionId);
   else if (parsed.decisionId !== null) refuse("bad-args");
   if (parsed.step === "health-key") assertHealthKey(inputs);
+  if (parsed.step === "kit-install") assertKitForInstall(inputs);
   if (entry.key && !process.env.CLOUDFLARE_API_TOKEN) refuse("bad-args");
   const variantArgv = entry.variants ? entry.variants[parsed.variant] : [];
   let command = process.execPath;
@@ -530,7 +542,7 @@ class Classifier {
       if (entry.all_of) {
         const seen = this.allOf.get(entry.id) || new Set();
         entry.all_of.forEach((part, index) => {
-          if (line.includes(part.match)) {
+          if (entryMatches(part, line)) {
             seen.add(index);
             matchedPhrase = true;
           }

@@ -1,0 +1,18 @@
+{
+  "tier2": "off",
+  "w8": "off",
+  "marker": "REHEARSAL.marker",
+  "kit_url": "https://financialbrain.ai/kit/brain-installer-0.4.9-0555ad1972d7f8d6.tgz",
+  "kit_sha256": "0555ad1972d7f8d6c1ded78a9fc4265f873cc4f4ce8c11fd04198cc5599409b2",
+  "kit_bytes": 6668013,
+  "kit_version": "0.4.9",
+  "runtime_payload_sha256": "462d31da0b249cfaa74bb509fa8c7fd5b6a44624597f11536a652a9d2fcd46f6",
+  "min_free_mb": null,
+  "history_delete_proven": false,
+  "cloud_clipboard_allowed": false,
+  "key_lengths": [40],
+  "drain_per_minute": 60,
+  "kit_schema": 48,
+  "daily_cap_default": 10,
+  "phrase_table_version": "PENDING"
+}

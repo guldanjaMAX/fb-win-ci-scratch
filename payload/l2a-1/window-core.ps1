@@ -39,7 +39,7 @@ function Initialize-FbCore {
     $factsPath = Join-Path $FB.Session 'facts.json'
     if (-not (Test-Path -LiteralPath $factsPath -PathType Leaf)) { throw 'facts missing' }
     if ((Get-Item -LiteralPath $factsPath).Length -gt 1MB) { throw 'facts too large' }
-    $FB.Facts = Get-Content -LiteralPath $factsPath -Raw | ConvertFrom-Json
+    $FB.Facts = Get-Content -LiteralPath (Join-Path $FB.Session 'facts.json') -Raw | ConvertFrom-Json
     $markerPath = Join-Path $FB.Session 'REHEARSAL.marker'
     $markerLines = @()
     if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
@@ -158,6 +158,7 @@ function Start-FbStep {
     param(
         [Parameter(Mandatory=$true)][string]$Step,
         [string]$Variant,
+        [string]$DecisionId,
         [switch]$WithKey
     )
     $allowedVariants = @{
@@ -168,12 +169,14 @@ function Start-FbStep {
     if ($allowedVariants.ContainsKey($Step)) {
         if (-not $Variant -or $allowedVariants[$Step] -cnotcontains $Variant) { throw 'bad step variant' }
     } elseif ($Variant) { throw 'unexpected step variant' }
+    if ($DecisionId -and $Step -cne 'deploy-recover') { throw 'decision id not allowed for step' }
     $keySteps = @('verify', 'health-key', 'update', 'deploy-recover')
     if ($WithKey -and $keySteps -cnotcontains $Step) { throw 'key not allowed for step' }
     if ($WithKey -and (-not $FB.KeyReady -or $null -eq $script:FbKey)) { throw 'key unavailable' }
 
     $argv = @((Join-Path $FB.Session 'fb-run.mjs'), 'start', $Step, '--session', $FB.Session)
     if ($Variant) { $argv += @('--variant', $Variant) }
+    if ($DecisionId) { $argv += @('--decision-id', $DecisionId) }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FB.Node
     $psi.Arguments = (($argv | ForEach-Object { Quote-FbArgument $_ }) -join ' ')

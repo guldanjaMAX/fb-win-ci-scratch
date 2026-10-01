@@ -7,13 +7,13 @@ const stopClasses = new Set(["preflight", "key", "kit", "update", "google", "man
 
 const reasons = new Map([
   ["RUN", new Set(["start", "test-seam-on", "tier2-off", "w8-only", "done", "part-missing", "decision-ignored", "window-fingerprint"])],
-  ["W1", new Set(["readout", "health-ready", "health-unreadable", "history-off", "update-running", "drive-terminal", "drive-review", "tier2-off"])],
-  ["W3", new Set(["copy-key", "key-bad", "key-saved", "two-bad", "key-visible"])],
+  ["W1", new Set(["readout", "domain-yes", "domain-no", "health-ready", "health-pending", "health-mismatch", "health-paused", "health-unreadable", "health-needs-key", "sac-on", "sac-eval", "sac-off", "sac-unknown", "history-on", "history-off", "history-cloud-on", "av-defender", "av-third-party", "av-unknown", "memory-ok", "memory-low", "load-running", "update-running", "drive-terminal", "drive-loading", "drive-review", "drive-none", "drive-unreadable", "node-version", "cli-version", "tier2-off"])],
+  ["W3", new Set(["key-start", "key-file-found", "key-file-rejected", "got-it", "two-candidates", "history-deleted", "history-delete-failed", "copy-key", "key-checked", "key-bad", "key-saved", "save-failed", "verify-network", "nudge", "two-bad", "key-visible", "timeout", "history-unproven", "history-cloud"])],
   ["W4", new Set(["queue-zero", "pending", "projection", "queue", "wait-elapsed", "finish-later"])],
   ["W5", new Set(["drive-not-terminal"])],
   ["W6", new Set(["sha"])],
   ["W7", new Set(["stage", "rejoin", "retry-cpu-reset", "retry-last-stage-503", "verified", "pending-migration-seen", "queue-not-empty", "update-retry", "update-queued", "queued", "second-failure", "pending-migration"])],
-  ["W8", new Set(["check-start", "calendar-ok", "reconnect-needed", "scopes-all", "scope-missing-calendar", "google-partial", "google-consent", "google-busy", "google-none", "check-failed"])],
+  ["W8", new Set(["check-start", "calendar-ok", "reconnect-needed", "connected", "scopes-all", "scope-missing-drive", "scope-missing-gmail", "scope-missing-calendar", "account-changed", "account-same", "account-unknown", "restored", "kept", "sac-refused", "google-partial", "google-account", "google-consent", "off", "google-busy", "google-none", "consent-not-finished", "check-failed", "connect-failed"])],
   ["W11", new Set(["key-removed", "done"])]
 ]);
 

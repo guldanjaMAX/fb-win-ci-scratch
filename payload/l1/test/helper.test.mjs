@@ -270,7 +270,8 @@ test("test 4: stub and registration templates carry the required Windows behavio
   assert.match(registration, /ExecutionTimeLimit \(\[TimeSpan\]::Zero\)/u);
   assert.match(registration, /EndBoundary/u);
   assert.match(registration, /DeleteExpiredTaskAfter/u);
-  assert.match(registration, /LogonType Interactive/u);
+  assert.match(REGISTER_TEMPLATE, /-LogonType '@@LOGON@@'/u);
+  assert.match(registration, /LogonType 'Interactive'/u);
 });
 
 test("test 5: follow returns only at part boundaries, close, or cap", async (t) => {

@@ -1,3 +1,3 @@
-ci/ps/task.ps1 encoded-command
-payload/l0/ps/register.ps1 encoded-command
-payload/l1/ps/register.ps1 encoded-command
+ci/ps/task.ps1 encoded-command sha256=17b2fc1fc97dfdbfaf59172c792b8db340c7b09c89334bfddd9f1f34d380f928 contract=window-contract-section-1-and-wci-b5
+payload/l0/ps/register.ps1 encoded-command sha256=249485a09be658da4af3aa4c249b10a99905a54e3b0247940ad7a3145599e906 contract=l0-p11-and-loader-addendum
+payload/l1/ps/register.ps1 encoded-command sha256=0593ab575346f434659c19dee1f4fe338c2155dcc5f9ab507ce9bfcf507b806a contract=l1-p11-and-loader-addendum

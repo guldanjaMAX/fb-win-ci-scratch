@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,10 +7,19 @@ function lineOf(text, index) {
   return text.slice(0, index).split("\n").length;
 }
 
+function sourceLine(text, line) {
+  return (text.split("\n")[line - 1] ?? "").replace(/\r$/u, "");
+}
+
+function contentHash(text, line) {
+  return createHash("sha256").update(sourceLine(text, line)).digest("hex");
+}
+
 function addMatches(hits, text, file, rule, expression) {
   expression.lastIndex = 0;
   for (const match of text.matchAll(expression)) {
-    hits.push({ file, line: lineOf(text, match.index), rule });
+    const line = lineOf(text, match.index);
+    hits.push({ file, line, rule, contentHash: contentHash(text, line) });
   }
 }
 
@@ -17,14 +27,14 @@ export function inspectPowerShell(bytes, file = "input.ps1") {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   const hits = [];
   if (buffer.length >= 2 && ((buffer[0] === 0xff && buffer[1] === 0xfe) || (buffer[0] === 0xfe && buffer[1] === 0xff))) {
-    hits.push({ file, line: 1, rule: "bom" });
+    hits.push({ file, line: 1, rule: "bom", contentHash: contentHash(buffer.toString("utf8"), 1) });
   }
   if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
-    hits.push({ file, line: 1, rule: "bom" });
+    hits.push({ file, line: 1, rule: "bom", contentHash: contentHash(buffer.toString("utf8"), 1) });
   }
   for (let index = 0; index < buffer.length; index += 1) {
     if (buffer[index] > 0x7f) {
-      hits.push({ file, line: 1, rule: "non-ascii" });
+      hits.push({ file, line: 1, rule: "non-ascii", contentHash: contentHash(buffer.toString("utf8"), 1) });
       break;
     }
   }
@@ -47,25 +57,81 @@ export function inspectPowerShell(bytes, file = "input.ps1") {
     const line = text.slice(lineStart, lineEnd);
     const allowedPath = /(?:facts\.json|phrases\.json|steps[\\/])/iu.test(line);
     const hasLimit = /(?:1\s*MB|1048576)/iu.test(text.slice(Math.max(0, lineStart - 500), lineEnd + 200));
-    if (!allowedPath || !hasLimit) hits.push({ file, line: lineOf(text, match.index), rule: "json-path" });
+    if (!allowedPath || !hasLimit) {
+      const lineNumber = lineOf(text, match.index);
+      hits.push({ file, line: lineNumber, rule: "json-path", contentHash: contentHash(text, lineNumber) });
+    }
   }
   for (const match of text.matchAll(/Set-Clipboard[^\r\n]*/giu)) {
     if (!/(?:-Value\s+)?(?:' '|" ")\s*$/u.test(match[0].trim())) {
-      hits.push({ file, line: lineOf(text, match.index), rule: "clipboard-value" });
+      const lineNumber = lineOf(text, match.index);
+      hits.push({ file, line: lineNumber, rule: "clipboard-value", contentHash: contentHash(text, lineNumber) });
     }
   }
   for (const match of text.matchAll(/[^\r\n]*\$env:CLOUDFLARE_API_TOKEN[^\r\n]*/giu)) {
     if (/(?:Set-Content|WriteAllText|WriteAllBytes|AppendAllText|Out-File|Add-Content)/iu.test(match[0])) {
-      hits.push({ file, line: lineOf(text, match.index), rule: "token-env-write" });
+      const lineNumber = lineOf(text, match.index);
+      hits.push({ file, line: lineNumber, rule: "token-env-write", contentHash: contentHash(text, lineNumber) });
     }
   }
   addMatches(hits, text, file, "winrt-enum-name", /-(?:eq|ne)\s*['"](?:Completed|Started|Canceled|Error)['"]/giu);
   return hits;
 }
 
+function maskJavaScriptText(source) {
+  const chars = [...source];
+  let quote = "";
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index];
+    const next = chars[index + 1];
+    if (lineComment) {
+      if (char === "\n") lineComment = false;
+      else chars[index] = " ";
+      continue;
+    }
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        chars[index] = " ";
+        chars[index + 1] = " ";
+        index += 1;
+        blockComment = false;
+      } else if (char !== "\n") chars[index] = " ";
+      continue;
+    }
+    if (quote) {
+      if (char === "\\") {
+        chars[index] = " ";
+        if (chars[index + 1] !== "\n") chars[index + 1] = " ";
+        index += 1;
+      } else if (char === quote) {
+        chars[index] = " ";
+        quote = "";
+      } else if (char !== "\n") chars[index] = " ";
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      chars[index] = " ";
+      quote = char;
+    } else if (char === "/" && next === "/") {
+      chars[index] = " ";
+      chars[index + 1] = " ";
+      index += 1;
+      lineComment = true;
+    } else if (char === "/" && next === "*") {
+      chars[index] = " ";
+      chars[index + 1] = " ";
+      index += 1;
+      blockComment = true;
+    }
+  }
+  return chars.join("");
+}
+
 function callSlices(source, name) {
   const slices = [];
-  const expression = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\s*\\(`, "gu");
+  const expression = new RegExp(`(?<![.$\\w])${name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\s*\\(`, "gu");
   for (const match of source.matchAll(expression)) {
     let depth = 0;
     let quote = "";
@@ -90,12 +156,13 @@ function callSlices(source, name) {
 
 export function inspectJavaScript(source, file = "input.mjs") {
   const hits = [];
+  const masked = maskJavaScriptText(source);
   const names = new Set(["spawn", "spawnSync", "execFile", "execFileSync", "fork"]);
-  for (const match of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*(?:\?\?|\|\|)\s*(spawn|spawnSync|execFile|execFileSync|fork)\b/gu)) {
+  for (const match of masked.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[^;\n]*(?:\?\?|\|\|)\s*(spawn|spawnSync|execFile|execFileSync|fork)\b/gu)) {
     names.add(match[1]);
   }
   for (const name of names) {
-    for (const call of callSlices(source, name)) {
+    for (const call of callSlices(masked, name)) {
       if (!/windowsHide\s*:\s*true/u.test(call.text)) {
         hits.push({ file, line: lineOf(source, call.index), rule: "spawn-options" });
       }
@@ -105,11 +172,32 @@ export function inspectJavaScript(source, file = "input.mjs") {
     }
   }
   for (const name of ["exec", "execSync"]) {
-    for (const call of callSlices(source, name)) {
+    for (const call of callSlices(masked, name)) {
       hits.push({ file, line: lineOf(source, call.index), rule: "shell-api" });
     }
   }
   return hits;
+}
+
+export function parseStaticExemptions(lines) {
+  const exemptions = new Map();
+  for (const line of lines) {
+    const match = line.match(/^(\S+)\s+(\S+)\s+sha256=([a-f0-9]{64})\s+contract=(\S(?:.*\S)?)$/u);
+    if (!match) throw new Error("invalid static exemption");
+    const [, file, rule, hash] = match;
+    if (!exemptions.has(file)) exemptions.set(file, new Map());
+    const rules = exemptions.get(file);
+    if (!rules.has(rule)) rules.set(rule, new Set());
+    rules.get(rule).add(hash);
+  }
+  return exemptions;
+}
+
+function isExempt(exemptions, file, hit) {
+  const rules = exemptions.get(file);
+  if (!(rules instanceof Map)) return false;
+  const hashes = rules.get(hit.rule);
+  return hashes instanceof Set && hashes.has(hit.contentHash);
 }
 
 export function inspectReleasePatterns(source, file = "input") {
@@ -177,8 +265,7 @@ export async function runRepositoryGate({ root, parseTargets = [], exemptions = 
   const hits = [];
   for (const file of psTargets) {
     const relative = path.relative(root, file).split(path.sep).join("/");
-    const allowed = exemptions.get(relative) ?? new Set();
-    hits.push(...inspectPowerShell(await readFile(file), relative).filter((hit) => !allowed.has(hit.rule)));
+    hits.push(...inspectPowerShell(await readFile(file), relative).filter((hit) => !isExempt(exemptions, relative, hit)));
   }
   for (const file of jsTargets) {
     const relative = path.relative(root, file).split(path.sep).join("/");

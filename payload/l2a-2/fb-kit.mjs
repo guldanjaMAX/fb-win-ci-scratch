@@ -121,7 +121,7 @@ export async function fetchKit(options, seams = {}) {
   }
   mkdirSync(options.out, { recursive: true });
   const name = basename(new URL(options.url).pathname);
-  const finalPath = join(options.out, name);
+  const finalPath = join(options.out, "tgz");
   const partPath = `${finalPath}.part`;
   if (existsSync(finalPath) && statSync(finalPath).isFile()) {
     const existing = await hashFile(finalPath);

@@ -1,0 +1,866 @@
+{
+  "schema": 1,
+  "kit_commit": "67e9693132b18c8070bc557ac83d61bbaf612970",
+  "entries": [
+    {
+      "id": "deploy-recover-ok",
+      "steps": [
+        "deploy-recover"
+      ],
+      "kind": "class",
+      "value": "deploy-recovered",
+      "outcome": "success",
+      "priority": 10,
+      "match": "deployed \"",
+      "source": "brain.mjs:2800"
+    },
+    {
+      "id": "health-capped",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-capped",
+      "outcome": "failure",
+      "match": "over 10,000 pieces",
+      "source": "brain.mjs:3930",
+      "priority": 25
+    },
+    {
+      "id": "health-mismatch",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-mismatch",
+      "outcome": "failure",
+      "match": "Vectorize holds ",
+      "source": "brain.mjs:3563",
+      "priority": 30
+    },
+    {
+      "id": "health-needs-key",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-needs-key",
+      "outcome": "failure",
+      "match": "this manifest has no saved brain.domain, and no Cloudflare access is available",
+      "source": "brain.mjs:3618",
+      "priority": 45
+    },
+    {
+      "id": "health-paused",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-paused",
+      "outcome": "failure",
+      "match": "this Brain is paused for an update and cannot accept documents.",
+      "source": "brain.mjs:3873",
+      "priority": 40
+    },
+    {
+      "id": "health-pending",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-pending",
+      "outcome": "failure",
+      "match": "are not query-visible yet",
+      "capture": "([0-9,]+) vector operation\\(s\\)",
+      "source": "brain.mjs:3959",
+      "priority": 20
+    },
+    {
+      "id": "health-processing",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-pending",
+      "outcome": "failure",
+      "match": "are still processing",
+      "capture": "([0-9,]+) vector operation\\(s\\)",
+      "source": "brain.mjs:3943",
+      "priority": 20
+    },
+    {
+      "id": "health-ready",
+      "steps": [
+        "health",
+        "health-key"
+      ],
+      "kind": "class",
+      "value": "health-ready",
+      "outcome": "success",
+      "match": "vector index is query-ready (",
+      "source": "brain.mjs:3987",
+      "priority": 10
+    },
+    {
+      "id": "kit-install-ebusy",
+      "steps": [
+        "kit-install"
+      ],
+      "kind": "class",
+      "value": "install-busy",
+      "outcome": "failure",
+      "priority": 90,
+      "match": "EBUSY",
+      "source": "provider-text",
+      "why": "npm filesystem busy error text."
+    },
+    {
+      "id": "kit-install-eperm",
+      "steps": [
+        "kit-install"
+      ],
+      "kind": "class",
+      "value": "install-busy",
+      "outcome": "failure",
+      "priority": 90,
+      "match": "EPERM",
+      "source": "provider-text",
+      "why": "npm filesystem permission-busy error text."
+    },
+    {
+      "id": "preview-payload-mismatch",
+      "steps": [
+        "update-preview"
+      ],
+      "kind": "class",
+      "value": "payload-mismatch",
+      "outcome": "failure",
+      "priority": 95,
+      "match": "UPDATE_PREVIEW_RUNTIME_PAYLOAD_MISMATCH",
+      "source": "operations/update-preview.mjs:60"
+    },
+    {
+      "id": "preview-projection-excess",
+      "steps": [
+        "update-preview"
+      ],
+      "kind": "class",
+      "value": "projection-not-ready",
+      "outcome": "failure",
+      "priority": 90,
+      "match": "UPDATE_PREVIEW_PROJECTION_EXCESS",
+      "source": "operations/update-preview.mjs:73"
+    },
+    {
+      "id": "preview-projection-insufficient",
+      "steps": [
+        "update-preview"
+      ],
+      "kind": "class",
+      "value": "projection-not-ready",
+      "outcome": "failure",
+      "priority": 90,
+      "match": "UPDATE_PREVIEW_PROJECTION_WORK_INSUFFICIENT",
+      "source": "operations/update-preview.mjs:74"
+    },
+    {
+      "id": "preview-projection-missing",
+      "steps": [
+        "update-preview"
+      ],
+      "kind": "class",
+      "value": "projection-not-ready",
+      "outcome": "failure",
+      "priority": 90,
+      "match": "UPDATE_PREVIEW_PROJECTION_WORK_MISSING",
+      "source": "operations/update-preview.mjs:76"
+    },
+    {
+      "id": "preview-projection-pending",
+      "steps": [
+        "update-preview"
+      ],
+      "kind": "class",
+      "value": "projection-not-ready",
+      "outcome": "failure",
+      "priority": 90,
+      "match": "UPDATE_PREVIEW_PROJECTION_VISIBILITY_PENDING",
+      "source": "operations/update-preview.mjs:77"
+    },
+    {
+      "id": "preview-projection-uncounted",
+      "steps": [
+        "update-preview"
+      ],
+      "kind": "class",
+      "value": "projection-not-ready",
+      "outcome": "failure",
+      "priority": 90,
+      "match": "UPDATE_PREVIEW_PROJECTION_WORK_UNCOUNTED",
+      "source": "operations/update-preview.mjs:75"
+    },
+    {
+      "id": "preview-ready",
+      "steps": [
+        "update-preview"
+      ],
+      "kind": "class",
+      "value": "preview-ready",
+      "outcome": "success",
+      "priority": 10,
+      "all_of": [
+        {
+          "match": "pre_update_check_complete",
+          "source": "operations/update-preview.mjs:1841"
+        },
+        {
+          "match": "projection_ready",
+          "suffix_regex": "^\": true,?$",
+          "source": "operations/update-preview.mjs:1844"
+        }
+      ],
+      "source": "operations/update-preview.mjs:1841"
+    },
+    {
+      "id": "smart-app-refused",
+      "steps": [
+        "health",
+        "health-key",
+        "verify"
+      ],
+      "kind": "class",
+      "value": "sac-refused",
+      "outcome": "failure",
+      "match": "Windows refused to run the temporary DPAPI helper",
+      "source": "operations/windows-dpapi-session.mjs:45",
+      "priority": 80
+    },
+    {
+      "id": "verify-bad-credential",
+      "steps": [
+        "verify"
+      ],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "Cloudflare refused the credential:",
+      "source": "brain.mjs:22779",
+      "priority": 50
+    },
+    {
+      "id": "verify-bad-dates",
+      "steps": [
+        "verify"
+      ],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "Cloudflare did not accept ",
+      "source": "brain.mjs:22769",
+      "priority": 50
+    },
+    {
+      "id": "verify-network",
+      "steps": [
+        "verify"
+      ],
+      "kind": "class",
+      "value": "network",
+      "outcome": "failure",
+      "match": "Your internet connection dropped while talking to Cloudflare.",
+      "source": "brain.mjs:22744",
+      "priority": 70
+    },
+    {
+      "id": "verify-no-account",
+      "steps": [
+        "verify"
+      ],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "this Cloudflare approval cannot see any account.",
+      "source": "brain.mjs:1649",
+      "priority": 50
+    },
+    {
+      "id": "verify-ok",
+      "steps": [
+        "verify"
+      ],
+      "kind": "class",
+      "value": "key-ok",
+      "outcome": "success",
+      "match": "Cloudflare access confirmed for account",
+      "source": "brain.mjs:1721",
+      "priority": 10
+    },
+    {
+      "id": "verify-wrong-account",
+      "steps": [
+        "verify"
+      ],
+      "kind": "class",
+      "value": "key-rejected",
+      "outcome": "failure",
+      "match": "but this Cloudflare approval can only see:",
+      "source": "brain.mjs:1656",
+      "priority": 50
+    },
+    {
+      "id": "w7-agent-refresh-warning",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "agent-refresh-warning",
+      "outcome": "info",
+      "priority": 5,
+      "match": "The Brain software update is verified, but an existing local AI connection",
+      "source": "brain.mjs:26905"
+    },
+    {
+      "id": "w7-count-mismatch",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "mismatch",
+      "outcome": "failure",
+      "priority": 91,
+      "match": "Vectorize holds ",
+      "source": "brain.mjs:3563"
+    },
+    {
+      "id": "w7-cpu-reset",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "cpu-reset",
+      "outcome": "failure",
+      "priority": 95,
+      "all_of": [
+        {
+          "match": "update stopped during ",
+          "source": "brain.mjs:6480"
+        },
+        {
+          "match": "paused vector-drain health verification",
+          "source": "brain.mjs:6323"
+        },
+        {
+          "match": "exceeded its CPU time limit and was reset",
+          "source": "provider-text",
+          "why": "Provider database reset text recorded in the owner runbook."
+        }
+      ],
+      "source": "brain.mjs:6480"
+    },
+    {
+      "id": "w7-first-gate",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "queue-first",
+      "outcome": "failure",
+      "priority": 80,
+      "match": "Your Brain is still indexing ",
+      "source": "brain.mjs:23628"
+    },
+    {
+      "id": "w7-last-stage-503",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "last-stage-503",
+      "outcome": "failure",
+      "priority": 96,
+      "all_of": [
+        {
+          "match": "update stopped during ",
+          "source": "brain.mjs:6480"
+        },
+        {
+          "match": "vector projection convergence",
+          "source": "brain.mjs:6414"
+        },
+        {
+          "match": "drain failed (",
+          "suffix_regex": "^503\\)",
+          "source": "brain.mjs:24603"
+        },
+        {
+          "match": "brain corpus writes are paused for a verified upgrade or rollback",
+          "source": "worker/src/index.js:2666"
+        }
+      ],
+      "source": "brain.mjs:6480"
+    },
+    {
+      "id": "w7-network",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "network",
+      "outcome": "failure",
+      "priority": 88,
+      "match": "Your internet connection dropped while talking to Cloudflare.",
+      "source": "brain.mjs:22744"
+    },
+    {
+      "id": "w7-paused-queue-initial",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "queued-paused",
+      "outcome": "failure",
+      "priority": 92,
+      "match": "is still paused for an update that has not finished",
+      "source": "brain.mjs:23620"
+    },
+    {
+      "id": "w7-paused-queue-stage",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "queued-paused",
+      "outcome": "failure",
+      "priority": 92,
+      "all_of": [
+        {
+          "match": "THIS BRAIN CANNOT ACCEPT DOCUMENTS RIGHT NOW.",
+          "source": "brain.mjs:6487"
+        },
+        {
+          "match": "are not query-visible yet",
+          "source": "brain.mjs:3959"
+        }
+      ],
+      "source": "brain.mjs:6487"
+    },
+    {
+      "id": "w7-pending-migration",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "pending-migration",
+      "outcome": "info",
+      "priority": 5,
+      "match": "applying ",
+      "suffix_regex": "^\\d{4}_[a-z0-9_]+$",
+      "source": "brain.mjs:4688"
+    },
+    {
+      "id": "w7-pre-pause-gate",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "queue-prepause",
+      "outcome": "failure",
+      "priority": 81,
+      "match": "queued search update(s) before the paused deployment",
+      "source": "brain.mjs:23637"
+    },
+    {
+      "id": "w7-stage-acceptance",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "acceptance",
+      "n": 11,
+      "match": "acceptance suite against ",
+      "source": "brain.mjs:6802"
+    },
+    {
+      "id": "w7-stage-active-deploy",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "active-deploy",
+      "n": 7,
+      "match": "deployed \"",
+      "source": "brain.mjs:2800"
+    },
+    {
+      "id": "w7-stage-active-health",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "active-health",
+      "n": 8,
+      "match": "agree on ",
+      "suffix_regex": "^[^\\r\\n]+/active",
+      "source": "brain.mjs:3878"
+    },
+    {
+      "id": "w7-stage-bookmark",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "bookmark",
+      "n": 1,
+      "match": "required D1 restore bookmark captured",
+      "source": "brain.mjs:6229"
+    },
+    {
+      "id": "w7-stage-convergence",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "convergence",
+      "n": 9,
+      "match": "newly confirmed this run)",
+      "source": "brain.mjs:24412"
+    },
+    {
+      "id": "w7-stage-done",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "done",
+      "n": 13,
+      "match": "Done. Your Brain is now on version ",
+      "source": "brain.mjs:28378"
+    },
+    {
+      "id": "w7-stage-exact-health",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "exact-health",
+      "n": 10,
+      "after": 9,
+      "match": "confirmed vector(s))",
+      "source": "brain.mjs:3987"
+    },
+    {
+      "id": "w7-stage-migration-current",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "migration",
+      "n": 6,
+      "match": "schema up to date (",
+      "source": "brain.mjs:4616"
+    },
+    {
+      "id": "w7-stage-migration-pending",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "migration",
+      "n": 6,
+      "match": "applying ",
+      "suffix_regex": "^\\d{4}_[a-z0-9_]+$",
+      "source": "brain.mjs:4688"
+    },
+    {
+      "id": "w7-stage-paused-deploy",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "paused-deploy",
+      "n": 3,
+      "match": "deployed \"",
+      "source": "brain.mjs:2800"
+    },
+    {
+      "id": "w7-stage-paused-health",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "paused-health",
+      "n": 4,
+      "match": "/health and authenticated inventory agree on ",
+      "suffix_regex": "^[^\\r\\n]+/paused-for-upgrade",
+      "source": "brain.mjs:3878"
+    },
+    {
+      "id": "w7-stage-quiescence",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "quiescence",
+      "n": 5,
+      "match": "safety pause: ",
+      "source": "brain.mjs:5345"
+    },
+    {
+      "id": "w7-stage-start",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "start",
+      "n": 2,
+      "match": "Updating your Brain from ",
+      "source": "brain.mjs:6251"
+    },
+    {
+      "id": "w7-stage-verified",
+      "steps": [
+        "update"
+      ],
+      "kind": "stage",
+      "value": "verified-stage",
+      "n": 12,
+      "match": "upgrade verified, now at ",
+      "source": "brain.mjs:6499"
+    },
+    {
+      "id": "w7-unknown-stopped",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "unknown-update",
+      "outcome": "failure",
+      "priority": 20,
+      "match": "update stopped during ",
+      "source": "brain.mjs:6480"
+    },
+    {
+      "id": "w7-update-busy",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "update-busy",
+      "outcome": "failure",
+      "priority": 82,
+      "match": "UPDATE_BRAIN_BUSY",
+      "source": "brain.mjs:28221"
+    },
+    {
+      "id": "w7-verified",
+      "steps": [
+        "update"
+      ],
+      "kind": "class",
+      "value": "verified",
+      "outcome": "success",
+      "priority": 10,
+      "match": "upgrade verified, now at ",
+      "source": "brain.mjs:6499"
+    },
+    {
+      "id": "w8-calendar-ok",
+      "steps": [
+        "google-calendar-check"
+      ],
+      "kind": "class",
+      "value": "ok",
+      "outcome": "success",
+      "match": "dry run:",
+      "source": "brain.mjs:13581",
+      "priority": 10
+    },
+    {
+      "id": "w8-check-failed",
+      "steps": [
+        "google-calendar-check"
+      ],
+      "kind": "class",
+      "value": "check-failed",
+      "outcome": "failure",
+      "match": "Fix the calendar errors printed above",
+      "source": "brain.mjs:13595",
+      "priority": 20
+    },
+    {
+      "id": "w8-client-id-wall",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "client-id-wall",
+      "outcome": "failure",
+      "match": "GOOGLE_CLIENT_ID is not set.",
+      "source": "brain.mjs:18426",
+      "priority": 90
+    },
+    {
+      "id": "w8-connected",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "connected",
+      "outcome": "success",
+      "match": "connected. Token stored in",
+      "source": "brain.mjs:18480",
+      "priority": 10
+    },
+    {
+      "id": "w8-consent-cancelled",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "Google returned",
+      "source": "connectors/google-auth.mjs:195",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-no-refresh",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "Google did not return a refresh token.",
+      "source": "connectors/google-auth.mjs:262",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-port",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "is already in use, so the sign-in cannot complete",
+      "source": "connectors/google-auth.mjs:219",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-state",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "state mismatch",
+      "source": "connectors/google-auth.mjs:202",
+      "priority": 80
+    },
+    {
+      "id": "w8-consent-timeout",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "consent-not-finished",
+      "outcome": "failure",
+      "match": "timed out waiting for the browser to complete sign-in",
+      "source": "connectors/google-auth.mjs:236",
+      "priority": 80
+    },
+    {
+      "id": "w8-google-busy",
+      "steps": [
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "google-busy",
+      "outcome": "failure",
+      "match": "ingest is already running on this computer.",
+      "source": "operations/source-ingest-lock.mjs:275",
+      "priority": 100
+    },
+    {
+      "id": "w8-google-none",
+      "steps": [
+        "google-calendar-check"
+      ],
+      "kind": "class",
+      "value": "google-none",
+      "outcome": "failure",
+      "match": "no Google connection on this machine",
+      "source": "brain.mjs:19255",
+      "priority": 90
+    },
+    {
+      "id": "w8-reconnect-calendar-refusal",
+      "steps": [
+        "google-calendar-check"
+      ],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "brain.mjs:13594",
+      "priority": 100
+    },
+    {
+      "id": "w8-reconnect-calendar-warn",
+      "steps": [
+        "google-calendar-check"
+      ],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "brain.mjs:13573",
+      "priority": 100
+    },
+    {
+      "id": "w8-reconnect-cli-token",
+      "steps": [
+        "google-calendar-check"
+      ],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "connectors/google-auth.mjs:1562",
+      "priority": 100
+    },
+    {
+      "id": "w8-reconnect-missing-scope",
+      "steps": [
+        "google-calendar-check"
+      ],
+      "kind": "class",
+      "value": "reconnect",
+      "outcome": "failure",
+      "match": "Reconnect with",
+      "source": "brain.mjs:19260",
+      "priority": 100
+    },
+    {
+      "id": "w8-sac",
+      "steps": [
+        "google-calendar-check",
+        "google-connect"
+      ],
+      "kind": "class",
+      "value": "sac",
+      "outcome": "failure",
+      "match": "Smart App Control",
+      "source": "operations/windows-dpapi-session.mjs:46",
+      "priority": 95
+    }
+  ]
+}

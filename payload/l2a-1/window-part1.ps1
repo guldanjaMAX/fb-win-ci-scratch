@@ -242,7 +242,9 @@ function Get-FbClipboardText {
 function Clear-FbClipboard {
     if ($FB.TestSeam) {
         Remove-Item -LiteralPath (Join-Path $FB.Session 'test-clipboard.txt') -Force -ErrorAction SilentlyContinue
-    } else { Set-Clipboard -Value ' ' }
+    } else {
+        Set-Clipboard -Value ' '
+    }
 }
 
 function Find-FbClipboardCandidates {

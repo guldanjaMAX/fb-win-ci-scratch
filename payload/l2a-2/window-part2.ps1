@@ -330,10 +330,6 @@ function Invoke-FbDeployRecovery {
         Write-FbStatus -Step 'W7' -Code 'STOP' -Reason 'failed'
         return 'stop'
     }
-    Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'deploy-recovered'
-    if (-not $FB.DomainPresent) {
-        Write-FbStatus -Step 'W7' -Code 'INFO' -Reason 'manifest-changed'
-    }
     return 'stop'
 }
 
