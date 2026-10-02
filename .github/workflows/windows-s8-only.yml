@@ -1,5 +1,5 @@
 name: Windows S8 only
-run-name: S8 diagnostic ${{ inputs.expected_revision }}
+run-name: Startup logger probe ${{ inputs.expected_revision }}
 
 "on":
   workflow_dispatch:
@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  s8:
+  startup_logger:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -29,7 +29,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Only the reviewed scratch default branch is authorized' }
           if ($env:EXPECTED_REVISION -notmatch '^[0-9a-f]{40}$') { throw 'Expected revision must be a full SHA' }
-          if ($env:GITHUB_SHA -ne $env:EXPECTED_REVISION) { throw 'Dispatch revision changed; diagnostic not run' }
+          if ($env:GITHUB_SHA -ne $env:EXPECTED_REVISION) { throw 'Dispatch revision changed; probe not run' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -37,46 +37,66 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Require reviewed payload and Windows PowerShell 5.1 Desktop
+      - name: Require reviewed probe and Windows PowerShell 5.1 Desktop
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSEdition -ne 'Desktop') { throw 'Windows PowerShell 5.1 Desktop required' }
-          $expected = @{
-            'payload/l1/fb-store.mjs' = 'd30c7997d8bf17ae92402ef18641c0b82ab3e14b3ef8b83f240da7e456dc5b78'
-            'payload/l4/windows-store-pull.mjs' = '60f2f33f142a81f7df46b26ae21e22e3128706cd7042a020530f657a27d4bd9e'
-            'payload/s8-fix/store-action-pipes.test.mjs' = '12c87c56bafdb43c76996e3fdd7a41492486dd65c4b7fba9073368b0d5f6db00'
-            'payload/s8-fix/store-action-diagnostic.mjs' = '097e114343ebe318e332f34664f4dad4ea36d00598a75a1165b507fec53df9bc'
-          }
-          foreach ($entry in $expected.GetEnumerator()) {
-            if ((Get-FileHash $entry.Key -Algorithm SHA256).Hash.ToLowerInvariant() -ne $entry.Value) { throw "payload hash mismatch: $($entry.Key)" }
-          }
-      - name: Run one bounded synthetic diagnostic
+          $actual = (Get-FileHash '.\payload\s8-fix\powershell-startup-logger-probe.mjs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '5fbf226134a06798717c39e61528a86f2d56ee5290b614bbcc4e3c77d575659f') { throw 'Probe hash mismatch' }
+      - name: Run one helper-free probe and verify owned process termination
         shell: powershell
         env:
           BRAIN_NO_WRANGLER_LOGIN: '1'
         run: |
           $ErrorActionPreference = 'Stop'
-          $env:HELPER_PATH = (Resolve-Path '.\payload\l1\fb-store.mjs').Path
-          node .\payload\s8-fix\store-action-diagnostic.mjs --run --out .\ci-out\s8-diagnostic
-          if ($LASTEXITCODE -ne 0) { throw 'Diagnostic stopped at first failure; inspect retained phases and counts' }
-      - name: Bound diagnostic artifact storage
+          node .\payload\s8-fix\powershell-startup-logger-probe.mjs --run --out .\ci-out\s8-startup-logger
+          $NodeExit = $LASTEXITCODE
+          $Root = '.\ci-out\s8-startup-logger'
+          $Entry = @{ status = 'UNVERIFIED'; pid = $null; presentBefore = $false; identityMatched = $false }
+          try {
+            $Receipt = Get-Content "$Root\probe-receipt.json" -Raw | ConvertFrom-Json
+            $Invocation = Get-Content "$Root\invocation.json" -Raw | ConvertFrom-Json
+            $OwnedPid = [long]$Receipt.pid
+            if ($OwnedPid -le 0 -or $OwnedPid -gt 2147483647 -or $OwnedPid -eq $PID) { throw 'No valid owned PID' }
+            $Entry.pid = $OwnedPid
+            $Found = Get-CimInstance Win32_Process -Filter "ProcessId = $OwnedPid" -OperationTimeoutSec 2
+            if ($null -eq $Found) { $Entry.status = 'NOT_PRESENT_CONFIRMED' }
+            else {
+              $Entry.presentBefore = $true
+              $ExpectedEncoded = [string]$Invocation.argv[-1]
+              $Pattern = '(?:^|\s|\x22)' + [regex]::Escape($ExpectedEncoded) + '(?:$|\s|\x22)'
+              $Entry.identityMatched = (($Found.ExecutablePath -ieq [string]$Invocation.executable) -and ([string]$Found.CommandLine -cmatch $Pattern))
+              if (-not $Entry.identityMatched) { $Entry.status = 'IDENTITY_MISMATCH_NOT_STOPPED' }
+              else {
+                Stop-Process -Id $OwnedPid -Force -ErrorAction Stop
+                $After = Get-CimInstance Win32_Process -Filter "ProcessId = $OwnedPid" -OperationTimeoutSec 2
+                if ($null -eq $After) { $Entry.status = 'OWNED_PROCESS_TERMINATED_CONFIRMED' }
+                elseif (($After.ExecutablePath -ine [string]$Invocation.executable) -or ([string]$After.CommandLine -cnotmatch $Pattern)) { $Entry.status = 'ORIGINAL_GONE_PID_REUSED' }
+                else { $Entry.status = 'STILL_PRESENT_UNVERIFIED' }
+              }
+            }
+          } catch { $Entry.errorType = $_.Exception.GetType().FullName }
+          $Entry | ConvertTo-Json -Depth 3 | Out-File "$Root\termination-receipt.json" -Encoding utf8
+          if ($NodeExit -ne 0) { throw 'Probe failed; no retry authorized' }
+          if ($Entry.status -ne 'NOT_PRESENT_CONFIRMED') { throw 'Unexpected or unverified termination; stop' }
+      - name: Bound probe artifact storage
         id: artifact_cap
         if: always()
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $bytes = 0
-          if (Test-Path '.\ci-out\s8-diagnostic') {
-            $total = Get-ChildItem '.\ci-out\s8-diagnostic' -File -Recurse | Measure-Object -Property Length -Sum
+          if (Test-Path '.\ci-out\s8-startup-logger') {
+            $total = Get-ChildItem '.\ci-out\s8-startup-logger' -File -Recurse | Measure-Object -Property Length -Sum
             $bytes = [long]$total.Sum
           }
-          if ($bytes -gt 10485760) { throw 'Raw artifact exceeds approved 10 MiB cap; upload refused' }
+          if ($bytes -gt 10485760) { throw 'Artifact exceeds approved 10MiB cap; upload refused' }
           'within_limit=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always() && steps.artifact_cap.outputs.within_limit == 'true'
         with:
-          name: windows-s8-diagnostic-raw-results
-          path: ci-out/s8-diagnostic
+          name: windows-startup-logger-probe-results
+          path: ci-out/s8-startup-logger
           if-no-files-found: warn
           retention-days: 3
