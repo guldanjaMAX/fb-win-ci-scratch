@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import {
   appendFile,
   mkdir,
   readFile,
+  readdir,
   realpath,
   rename,
   rm,
@@ -29,6 +31,7 @@ const FILES = Object.freeze([
 const FACTS_NAME = "facts.json";
 const MARKER_NAME = "REHEARSAL.marker";
 const TASK_NAME = "Financial Brain update";
+const REFRESH_TASK_NAME = "Financial Brain daily refresh";
 const WINDOW_TITLE = "Financial Brain update";
 const PAGE_SENTENCES = Object.freeze({
   nothing: "Nothing more to run here today.",
@@ -39,6 +42,8 @@ const PAGE_SENTENCES = Object.freeze({
   closed: "The update window closed. Typing the same sentence again picks up where it left off.",
   working: "The update window is working.",
   done: "Done here. You can close this window.",
+  lastStage503: "The last update check returned 503. The window is trying one plain update again. If it stops, run read-only brain doctor, then one bare brain update once.",
+  refreshFailed: "The update finished, but daily refresh could not be restored. The team will look at it.",
 });
 const STEPS = new Set(["RUN", "W1", "W3", "W4", "W5", "W6", "W7", "W8", "W11"]);
 const CODES = new Set(["START", "PASS", "INFO", "SKIP", "WAITING", "STOP", "DONE"]);
@@ -319,6 +324,241 @@ function invokePowerShell(spawn, env, source) {
   });
 }
 
+function checkedActionPath(value, label) {
+  const text = String(value);
+  if (!text || /[\0\r\n"]/u.test(text)) throw new Error(`${label} is not safe for a Windows task action`);
+  return text;
+}
+
+export function quoteWindowsArgument(value) {
+  const text = String(value);
+  if (!text || /[\s"]/u.test(text)) {
+    let quoted = '"';
+    let backslashes = 0;
+    for (const character of text) {
+      if (character === "\\") {
+        backslashes += 1;
+      } else if (character === '"') {
+        quoted += "\\".repeat(backslashes * 2 + 1) + '"';
+        backslashes = 0;
+      } else {
+        quoted += "\\".repeat(backslashes) + character;
+        backslashes = 0;
+      }
+    }
+    return quoted + "\\".repeat(backslashes * 2) + '"';
+  }
+  return text;
+}
+
+export function buildRefreshAction({ nodePath, cliPath, manifestPath }) {
+  const node = checkedActionPath(nodePath, "node path");
+  const cli = checkedActionPath(cliPath, "CLI path");
+  const manifest = checkedActionPath(manifestPath, "manifest path");
+  const argumentsLine = [
+    quoteWindowsArgument(cli),
+    "load",
+    quoteWindowsArgument(manifest),
+    "--only",
+    "drive,calendar,upload",
+  ].join(" ");
+  const source = String.raw`$ErrorActionPreference = 'Stop'
+$Busy = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  [string]$_.CommandLine -match '(?i)brain\.mjs"?\s+(load|ingest|custom-api)(?:\s|$)'
+})
+if ($Busy.Count -gt 0) { exit 0 }
+$StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+$StartInfo.FileName = '${quotePowerShell(node)}'
+$StartInfo.Arguments = '${quotePowerShell(argumentsLine)}'
+$StartInfo.UseShellExecute = $false
+$StartInfo.CreateNoWindow = $true
+$StartInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+$StartInfo.EnvironmentVariables['BRAIN_NO_WRANGLER_LOGIN'] = '1'
+$StartInfo.EnvironmentVariables.Remove('CLOUDFLARE_API_TOKEN')
+$StartInfo.EnvironmentVariables.Remove('CF_API_TOKEN')
+$StartInfo.EnvironmentVariables.Remove('BRAIN_ADMIN_KEY')
+$Process = [System.Diagnostics.Process]::Start($StartInfo)
+if ($null -eq $Process) { exit 1 }
+$Process.WaitForExit()
+exit $Process.ExitCode
+`;
+  if (/(?:--key(?:\s|=)|CLOUDFLARE_API_TOKEN|CF_API_TOKEN|BRAIN_ADMIN_KEY)/iu.test(argumentsLine)) {
+    throw new Error("credential material is not allowed in the refresh action");
+  }
+  return Object.freeze({
+    source,
+    encoded: Buffer.from(source, "utf16le").toString("base64"),
+    argumentsLine,
+  });
+}
+
+export function fillRefreshRegister({
+  taskName = REFRESH_TASK_NAME,
+  powerShell,
+  actionEncoded,
+}) {
+  const actionArguments = `-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${actionEncoded}`;
+  return String.raw`$ErrorActionPreference = 'Stop'
+$TaskName = '${quotePowerShell(taskName)}'
+$Action = New-ScheduledTaskAction -Execute '${quotePowerShell(powerShell)}' -Argument '${quotePowerShell(actionArguments)}'
+$Trigger = New-ScheduledTaskTrigger -Daily -At '07:30'
+$Settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromMinutes(45))
+$User = "$env:USERDOMAIN\$env:USERNAME"
+$Principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Force | Out-Null
+`;
+}
+
+function refreshUnregisterSource(taskName) {
+  return String.raw`$ErrorActionPreference = 'Stop'
+$TaskName = '${quotePowerShell(taskName)}'
+$Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($null -ne $Task) {
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  $StopDeadline = [DateTime]::UtcNow.AddSeconds(20)
+  do {
+    $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -eq $Task -or [string]$Task.State -ne 'Running') { break }
+    Start-Sleep -Milliseconds 200
+  } while ([DateTime]::UtcNow -lt $StopDeadline)
+  if ($null -ne $Task -and [string]$Task.State -eq 'Running') { throw 'task did not stop' }
+  Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
+$RemoveDeadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
+  $Remaining = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if ($null -eq $Remaining) { break }
+  Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $RemoveDeadline)
+if ($null -ne $Remaining) { throw 'task remained registered' }
+exit 0
+`;
+}
+
+async function regularFile(path) {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function selectedPath(sessionDir, prefix) {
+  let entries;
+  try {
+    entries = await readdir(sessionDir);
+  } catch {
+    return null;
+  }
+  const matches = entries.filter((name) => name.startsWith(prefix) && name.endsWith(".txt"));
+  if (matches.length !== 1) return null;
+  const bytes = await readFile(join(sessionDir, matches[0]));
+  if (bytes.length === 0 || bytes.length > 64 * 1024) return null;
+  const value = bytes.toString("utf8").trim();
+  if (!value || /[\0\r\n]/u.test(value)) return null;
+  return resolve(value);
+}
+
+function defaultLoadRunning({ spawn, env }) {
+  const source = String.raw`$Busy = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  [string]$_.CommandLine -match '(?i)brain\.mjs"?\s+(load|ingest|custom-api)(?:\s|$)'
+})
+[Console]::Out.Write($Busy.Count)
+`;
+  const result = invokePowerShell(spawn, env, source);
+  return result?.status === 0 && Number.parseInt(String(result.stdout ?? "0").trim() || "0", 10) > 0;
+}
+
+function defaultRefreshStatus({ spawn, env, taskName }) {
+  const source = String.raw`$Task = Get-ScheduledTask -TaskName '${quotePowerShell(taskName)}' -ErrorAction SilentlyContinue
+if ($null -ne $Task) { [Console]::Out.Write([string]$Task.State) }
+`;
+  const result = invokePowerShell(spawn, env, source);
+  if (result?.status !== 0) return undefined;
+  return String(result.stdout ?? "").trim() || null;
+}
+
+export async function createRefreshScheduler(options = {}) {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const sessionDir = await realpath(options.sessionDir ?? moduleDir);
+  const platform = options.platform ?? process.platform;
+  const spawn = options.spawn ?? spawnSync;
+  const env = options.env ?? process.env;
+  const output = options.output ?? ((line) => process.stdout.write(`${line}\n`));
+  const taskName = options.taskName ?? REFRESH_TASK_NAME;
+  const nodePath = resolve(options.nodePath ?? process.execPath);
+  const loadRunning = options.loadRunning ?? (() => defaultLoadRunning({ spawn, env }));
+  const taskStatus = options.taskStatus ?? (() => defaultRefreshStatus({ spawn, env, taskName }));
+
+  function refuse(line, announce) {
+    if (announce) output(line);
+    return false;
+  }
+
+  async function schedule({ announce = true } = {}) {
+    if (platform !== "win32") return refuse("This command only works on Windows.", announce);
+    if (await loadRunning()) {
+      return refuse("A load is already running, so daily refresh was not changed.", announce);
+    }
+    const prefix = await selectedPath(sessionDir, "selected-prefix-");
+    const manifestSelection = await selectedPath(sessionDir, "selected-manifest-");
+    if (!prefix || !manifestSelection || !(await regularFile(manifestSelection))) {
+      return refuse("Daily refresh could not find this install.", announce);
+    }
+    const cliCandidate = join(prefix, "node_modules", "brain-installer", "brain.mjs");
+    if (!(await regularFile(cliCandidate))) {
+      return refuse("Daily refresh could not find the installed Brain command.", announce);
+    }
+    const powerShell = powerShellPath(env);
+    if (!powerShell) return refuse("Windows PowerShell could not be found.", announce);
+    let child;
+    try {
+      const action = buildRefreshAction({
+        nodePath,
+        cliPath: await realpath(cliCandidate),
+        manifestPath: await realpath(manifestSelection),
+      });
+      const registration = fillRefreshRegister({ taskName, powerShell, actionEncoded: action.encoded });
+      child = invokePowerShell(spawn, env, registration);
+    } catch {
+      child = null;
+    }
+    if (!child || child.status !== 0 || child.error || child.signal) {
+      return refuse("Daily refresh could not be scheduled.", announce);
+    }
+    if (announce) output("Daily refresh is scheduled for 7:30 AM.");
+    return true;
+  }
+
+  async function unschedule({ announce = true } = {}) {
+    if (platform !== "win32") return refuse("This command only works on Windows.", announce);
+    const powerShell = powerShellPath(env);
+    if (!powerShell) return refuse("Windows PowerShell could not be found.", announce);
+    let child;
+    try {
+      child = invokePowerShell(spawn, env, refreshUnregisterSource(taskName));
+    } catch {
+      child = null;
+    }
+    if (!child || child.status !== 0 || child.error || child.signal) {
+      return refuse("Daily refresh could not be paused.", announce);
+    }
+    if (announce) output("Daily refresh is not scheduled.");
+    return true;
+  }
+
+  async function status() {
+    if (platform !== "win32") return refuse("This command only works on Windows.", true);
+    const state = await taskStatus();
+    if (state === undefined) return refuse("Daily refresh status could not be read.", true);
+    if (state === null) output("Daily refresh is not scheduled.");
+    else output(`Daily refresh is scheduled for 7:30 AM (${state}).`);
+    return true;
+  }
+
+  return Object.freeze({ schedule, unschedule, status, sessionDir });
+}
+
 function defaultProcessQuery({ pid, spawn, env }) {
   const source = String.raw`$p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -ErrorAction SilentlyContinue
 if ($null -ne $p) { [Console]::Out.Write($p.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')) }
@@ -530,6 +770,11 @@ export async function createHelper(options = {}) {
       await appendHelper("status", "RUN.INFO.none");
       return guardedPage("status", PAGE_SENTENCES.nothing);
     }
+    const latest = events.at(-1);
+    if (latest?.step === "W7" && latest.code === "INFO" && latest.reason === "retry-last-stage-503") {
+      await appendHelper("status", statusValue(latest));
+      return guardedPage("status", PAGE_SENTENCES.lastStage503);
+    }
     const boundary = [...events].reverse().find((event) => BOUNDARY_CODES.has(event.code));
     if (!boundary) {
       if (!(await quickAlive())) {
@@ -638,6 +883,9 @@ export async function createHelper(options = {}) {
           } else {
             lines.push(line);
           }
+          if (event.step === "W7" && event.code === "INFO" && event.reason === "retry-last-stage-503") {
+            lines.push(`SAY: ${PAGE_SENTENCES.lastStage503}`);
+          }
           if (BOUNDARY_CODES.has(event.code)) {
             const sentence = await nowSentence(event.code === "DONE" ? PAGE_SENTENCES.done : PAGE_SENTENCES.working);
             hidden += sentence.hidden;
@@ -676,22 +924,61 @@ export async function createHelper(options = {}) {
     }
   }
 
-  return Object.freeze({ start, status, decide, follow, sessionDir, runDir });
+  async function isDone() {
+    const events = await allStatusEvents();
+    return events?.at(-1)?.step === "W11" && events.at(-1)?.code === "DONE";
+  }
+
+  return Object.freeze({ start, status, decide, follow, isDone, sessionDir, runDir });
 }
 
 async function main() {
-  const helper = await createHelper();
   const [verb, argument] = process.argv.slice(2);
-  if (verb === "start") await helper.start();
-  else if (verb === "status") await helper.status();
+  if (["schedule-refresh", "unschedule-refresh", "refresh-status"].includes(verb)) {
+    const scheduler = await createRefreshScheduler();
+    let ok;
+    if (verb === "schedule-refresh") ok = await scheduler.schedule();
+    else if (verb === "unschedule-refresh") ok = await scheduler.unschedule();
+    else ok = await scheduler.status();
+    if (!ok) process.exitCode = 1;
+    return;
+  }
+
+  const helper = await createHelper();
+  const scheduler = await createRefreshScheduler({ sessionDir: helper.sessionDir });
+  if (verb === "start") {
+    const paused = await scheduler.unschedule({ announce: false });
+    if (!paused) {
+      process.stdout.write(`${PAGE_SENTENCES.failed}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    await helper.start();
+  }
+  else if (verb === "status") {
+    if (await helper.isDone() && !(await scheduler.schedule({ announce: false }))) {
+      process.stdout.write(`${PAGE_SENTENCES.refreshFailed}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    await helper.status();
+  }
   else if (verb === "decide") await helper.decide(argument);
-  else if (verb === "follow") await helper.follow(argument);
+  else if (verb === "follow") {
+    await helper.follow(argument);
+    if (await helper.isDone() && !(await scheduler.schedule({ announce: false }))) {
+      process.stdout.write(`${PAGE_SENTENCES.refreshFailed}\n`);
+      process.exitCode = 1;
+    }
+  }
   else throw new Error("unknown helper verb");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch(() => {
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
+  try {
+    await main();
+  } catch {
     process.stdout.write("HELPER: ERROR internal\n");
     process.exitCode = 1;
-  });
+  }
 }

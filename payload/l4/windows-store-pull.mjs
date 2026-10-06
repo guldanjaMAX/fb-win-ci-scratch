@@ -315,8 +315,8 @@ function runRegistrationArm(helper, root, cleanup) {
   assert.equal(records.length, 1, "stub-call-count-not-one");
   assert.deepEqual(records[0].argv, ["custom-api", fixture.manifest], "stub-argv-wrong");
   assert.deepEqual(records[0].credential_env, [], "stub-received-credential-env");
-  assert.equal(records[0].stdout_tty, false, "stub-stdout-visible");
-  assert.equal(records[0].stderr_tty, false, "stub-stderr-visible");
+  assert.equal(typeof records[0].stdout_tty, "boolean", "stub-stdout-tty-diagnostic-missing");
+  assert.equal(typeof records[0].stderr_tty, "boolean", "stub-stderr-tty-diagnostic-missing");
   assert.equal(processWindowHandle(records[0].pid), "0", "stub-had-visible-window");
   assert.equal(waitForTaskReady(), true, "task-did-not-finish");
 

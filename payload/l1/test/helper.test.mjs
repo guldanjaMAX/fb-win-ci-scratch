@@ -25,6 +25,7 @@ const mismatch = "Something did not match, so nothing ran. The team will look at
 const closed = "The update window closed. Typing the same sentence again picks up where it left off.";
 const working = "The update window is working.";
 const done = "Done here. You can close this window.";
+const lastStage503 = "The last update check returned 503. The window is trying one plain update again. If it stops, run read-only brain doctor, then one bare brain update once.";
 const timestamp = "2026-10-01T07:00:00Z";
 
 function digest(bytes) {
@@ -365,6 +366,7 @@ test("test 6: status is non-blocking, one-line, and boundary based", async () =>
     [`${timestamp} W3 WAITING owner copy-key\n`, "Please copy the requested value.", "WAITING owner: Please copy the requested value.", "status=W3.WAITING.copy-key"],
     [`${timestamp} W1 STOP preflight av-third-party\n`, working, "STOP W1 preflight av-third-party", "status=W1.STOP.preflight-av-third-party"],
     [`${timestamp} W11 DONE done\n`, done, done, "status=W11.DONE.done"],
+    [`${timestamp} W4 PASS queue-zero\n${timestamp} W7 INFO retry-last-stage-503\n`, working, lastStage503, "status=W7.INFO.retry-last-stage-503"],
   ];
   for (const [statusText, nowText, expected, token] of cases) {
     const { item, run } = await statusArm(statusText, nowText);

@@ -495,6 +495,16 @@ async function runAll({ root, output, spawnImpl = defaultSpawn, environment = pr
       windowsHide: true,
       shell: false,
     });
+    const structured = new Map();
+    try {
+      const resultsPath = path.join(output, "store-pull-results", "store-pull-results.json");
+      const parsed = JSON.parse(await readFile(resultsPath, "utf8"));
+      for (const item of parsed) {
+        if (item && typeof item.id === "string") structured.set(item.id, item);
+      }
+    } catch {
+      // Existing result-missing handling below remains authoritative.
+    }
     const observed = new Map();
     for (const line of String(storeRun.stdout ?? "").split(/\r?\n/u)) {
       const match = /^STORE-ARM (S8-(?:REG|REFUSE|LIVE-WINDOW)) (PASS|FAIL|VOID) ([A-Za-z0-9_.-]+)$/u.exec(line);
@@ -505,11 +515,23 @@ async function runAll({ root, output, spawnImpl = defaultSpawn, environment = pr
       const result = observed.get(arm);
       if (!result) storeLines.push(checkLine("store", arm, "FAIL", "result-missing"));
       else storeLines.push(checkLine("store", arm, result.status, result.reason));
+      const cleanup = Array.isArray(structured.get(arm)?.cleanup) ? structured.get(arm).cleanup : [];
+      const cleanupDetails = cleanup.flatMap((item, index) => {
+        const prefix = `cleanup-${index + 1}`;
+        return [
+          `${prefix}-phase=${item.phase ?? "unknown"}`,
+          `${prefix}-command-argv=${JSON.stringify(item.command_argv ?? [])}`,
+          `${prefix}-exit=${item.status ?? item.error ?? "unknown"}`,
+          `${prefix}-stdout-first-5=${JSON.stringify(item.stdout_first_5 ?? [])}`,
+          `${prefix}-stderr-first-5=${JSON.stringify(item.stderr_first_5 ?? [])}`,
+        ];
+      });
       storeDetails.set(arm, [
         `command=node payload/l4/windows-store-pull.mjs --helper payload/l1/fb-store.mjs`,
         `runner-exit=${storeRun.status ?? storeRun.error?.code ?? "unknown"}`,
         `result=${result?.status ?? "missing"}`,
         `reason=${result?.reason ?? "result-missing"}`,
+        ...cleanupDetails,
       ]);
     }
     if (storeRun.status !== 0 && !storeLines.some((line) => / FAIL | VOID /u.test(line))) {

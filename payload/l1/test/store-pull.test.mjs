@@ -240,6 +240,11 @@ test("unschedule waits for stop and proves absence by readback", async () => {
     assert.match(source, /Unregister-ScheduledTask/u);
     assert.match(source, /\$RemoveDeadline/u, "removal polls scheduler readback");
     assert.match(source, /task remained registered/u, "removal proves absence by readback");
+    assert.match(source, /task remained registered[\s\S]*\nexit 0\n/u,
+      "an absent task forces a successful PowerShell exit");
+    const mutant = source.replace("\nexit 0\n", "\n");
+    assert.doesNotMatch(mutant, /task remained registered[\s\S]*\nexit 0\n/u,
+      "the missing-exit mutant is distinguishable");
     assert.match(source, new RegExp(taskName, "u"));
   } finally {
     await rm(item.root, { recursive: true, force: true });

@@ -85,37 +85,13 @@ $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
 $StartInfo.FileName = '${quotePowerShell(node)}'
 $StartInfo.Arguments = '${quotePowerShell(argumentsLine)}'
 $StartInfo.UseShellExecute = $false
-$StartInfo.RedirectStandardOutput = $true
-$StartInfo.RedirectStandardError = $true
 $StartInfo.CreateNoWindow = $true
 $StartInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
 $StartInfo.EnvironmentVariables['BRAIN_NO_WRANGLER_LOGIN'] = '1'
 $Process = [System.Diagnostics.Process]::Start($StartInfo)
 if ($null -eq $Process) { exit 1 }
-$ExitCode = 1
-try {
-  $StdoutDrain = $Process.StandardOutput.BaseStream.CopyToAsync([System.IO.Stream]::Null)
-  $StderrDrain = $Process.StandardError.BaseStream.CopyToAsync([System.IO.Stream]::Null)
-  while (-not $Process.WaitForExit(250)) {
-    if ($StdoutDrain.IsFaulted -or $StdoutDrain.IsCanceled -or $StderrDrain.IsFaulted -or $StderrDrain.IsCanceled) {
-      if (-not $Process.HasExited) { throw 'store pull output drain failed' }
-    }
-  }
-  $ExitCode = $Process.ExitCode
-  try {
-    [void][System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($StdoutDrain, $StderrDrain), 1000)
-  } catch { }
-} catch {
-  try {
-    if ($Process.HasExited) { $ExitCode = $Process.ExitCode }
-    else { $Process.Kill(); [void]$Process.WaitForExit(1000) }
-  } catch { }
-} finally {
-  try { $Process.StandardOutput.Close() } catch { }
-  try { $Process.StandardError.Close() } catch { }
-  try { $Process.Dispose() } catch { }
-}
-exit $ExitCode
+$Process.WaitForExit()
+exit $Process.ExitCode
 `;
   if (CREDENTIAL_ACTION.test(argumentsLine) || CREDENTIAL_ACTION.test(source)) {
     throw new Error("credential material is not allowed in the task action");
